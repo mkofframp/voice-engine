@@ -22,7 +22,16 @@ def test_long_speech_no_text_interrupts():
 
 
 def test_short_speech_no_text_undecided():
-    assert classify_user_speech("", 300) == "undecided"
+    assert classify_user_speech("", 240) == "undecided"
+
+
+def test_no_text_threshold_leaves_room_for_a_300ms_stop():
+    """Spec §6.4 (~300 ms threshold) and §7a (stop <= 300 ms from onset)."""
+    from voice_engine.interruption import INTERRUPT_SPEECH_MS
+
+    assert classify_user_speech("", INTERRUPT_SPEECH_MS) == "interruption"
+    assert classify_user_speech("", INTERRUPT_SPEECH_MS - 1) == "undecided"
+    assert INTERRUPT_SPEECH_MS <= 250
 
 
 def test_four_backchannel_tokens_interrupt():

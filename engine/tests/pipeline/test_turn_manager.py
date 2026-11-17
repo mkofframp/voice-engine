@@ -192,7 +192,7 @@ async def test_uh_huh_does_not_interrupt():
     async with TM() as h:
         await h.bot_starts()
         before = [dict(m) for m in h.context.get_messages()]
-        await h.user_talks(0.4, interim="uh-huh")
+        await h.user_talks(0.4, interim="uh-huh", interim_at=0.2)  # interim before 250 ms
         await h.send(TranscriptionFrame("uh-huh", "user", "t", finalized=True))
 
     assert not h.down(InterruptionFrame)
@@ -332,20 +332,32 @@ async def test_start_strategy_follows_bot_speaking_state():
     assert [p.enable_interruptions for p in seen] == [False, True]
 
 
-async def test_slow_uh_huh_does_not_interrupt():
+async def test_short_uh_huh_with_slow_stt_does_not_interrupt():
     """No-text path: speech with no transcript yet interrupts only once it has
-    lasted 600 ms (spec 6.4: speech lasting past a threshold is a real
-    interruption). A short "uh-huh" whose interim comes late stays a backchannel."""
+    lasted INTERRUPT_SPEECH_MS (spec 6.4: speech lasting past a threshold is a
+    real interruption). A short "mm" whose interim comes late stays a backchannel."""
     async with TM() as h:
         await h.bot_starts()
-        await h.user_talks(0.45)  # the "uh-huh" itself, no transcript yet
+        await h.user_talks(0.2)  # the "mm" itself, no transcript yet
         await h.send(VADUserStoppedSpeakingFrame(stop_secs=0.2), UP)
         h.clock.advance(0.5)  # the STT is slow
-        await h.send(InterimTranscriptionFrame("uh-huh", "user", "t"))
-        await h.send(TranscriptionFrame("uh-huh", "user", "t", finalized=True))
+        await h.send(InterimTranscriptionFrame("mm", "user", "t"))
+        await h.send(TranscriptionFrame("mm", "user", "t", finalized=True))
+        await asyncio.sleep(0.3)  # any timer has fired by now
 
     assert not h.down(InterruptionFrame)
     assert not h.events("interrupted")
+
+
+async def test_long_uh_huh_with_slow_stt_interrupts():
+    """The trade-off of a stop within 300 ms (README "Status"): an "uh-huh"
+    longer than INTERRUPT_SPEECH_MS whose interim has not arrived yet stops the bot."""
+    async with TM() as h:
+        await h.bot_starts()
+        await h.user_talks(0.45)  # no transcript yet
+        await h.send(InterimTranscriptionFrame("uh-huh", "user", "t"))
+
+    assert len(h.events("interrupted")) == 1
 
 
 async def test_long_speech_without_text_interrupts():
@@ -366,7 +378,7 @@ async def test_late_final_from_last_turn_does_not_barge_in():
         # The final of that turn lands after the turn ended, as the reply starts.
         await h.send(TranscriptionFrame("and the dog", "user", "t", finalized=True))
         await h.bot_starts()
-        await h.user_talks(0.25)  # a short "mm", not transcribed yet
+        await h.user_talks(0.2)  # a short "mm", not transcribed yet
 
     assert not h.down(InterruptionFrame)
     assert not h.events("interrupted")
@@ -517,7 +529,7 @@ async def test_uh_huh_in_sentence_gap_does_not_interrupt():
             await s.process_frame(BotStoppedSpeakingFrame())
             await s.process_frame(VADUserStartedSpeakingFrame())
             await s.process_frame(InterimTranscriptionFrame("uh-huh", "user", "t"))
-        await h.user_talks(0.3, interim="uh-huh")
+        await h.user_talks(0.3, interim="uh-huh", interim_at=0.2)
         await h.send(VADUserStoppedSpeakingFrame(stop_secs=0.2), UP)
         await h.send(TranscriptionFrame("uh-huh", "user", "t", finalized=True))
         await h.bot_starts()  # the next sentence
@@ -535,7 +547,7 @@ async def test_real_speech_in_sentence_gap_interrupts_through_turn_manager():
         await _sentence_gap(h)
         for s in h.strategies.start:
             await s.process_frame(VADUserStartedSpeakingFrame())
-        await h.user_talks(0.7)  # 600 ms+ of speech, no transcript yet
+        await h.user_talks(0.7)  # past INTERRUPT_SPEECH_MS of speech, no transcript yet
         assert len(h.down(InterruptionFrame)) == 1
         h.context.add_message({"role": "assistant", "content": "Once upon a time there was"})
         await h.tm.assistant_turn_stopped()
@@ -628,10 +640,55 @@ async def test_no_backchannel_while_bot_speaking():
     async with TM() as h:
         await h.send(UserStartedSpeakingFrame(), UP)
         await h.bot_starts()
-        await h.user_talks(3.0, interim="uh-huh")
+        await h.user_talks(3.0, interim="uh-huh", interim_at=0.2)
         await h.pause(0.4, complete=False)
         await h.send(BotStoppedSpeakingFrame(), UP)
         await h.pause(0.0, complete=True)  # and none when the turn is over
 
     assert not h.down(OutputAudioRawFrame)
     assert not h.events("backchannel")
+
+
+# ---------- I4: the stop is decided early enough for <= 300 ms ----------
+
+
+async def test_untranscribed_speech_interrupts_at_the_duration_threshold_without_a_tick():
+    """VAD confirms speech 200 ms in and the next UserSpeakingFrame comes 200 ms
+    later; the decision must not wait for it. With no transcript yet, speech that
+    has lasted INTERRUPT_SPEECH_MS interrupts on a timer of its own."""
+    from voice_engine.interruption import INTERRUPT_SPEECH_MS
+
+    assert INTERRUPT_SPEECH_MS <= 250  # leaves >= 50 ms of the 300 ms for the stop itself
+    async with TM() as h:
+        await h.bot_starts()
+        await h.send(VADUserStartedSpeakingFrame(start_secs=0.2), UP)  # onset was 200 ms ago
+        assert not h.down(InterruptionFrame)
+        h.clock.advance(INTERRUPT_SPEECH_MS / 1000 - 0.2)  # no frame arrives meanwhile
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            if h.events("interrupted"):
+                break
+
+        assert len(h.events("interrupted")) == 1
+        assert len(h.down(InterruptionFrame)) == 1
+
+
+async def test_backchannel_interim_before_threshold_keeps_bot_talking():
+    async with TM() as h:
+        await h.bot_starts()
+        await h.user_talks(0.6, interim="mm-hmm", interim_at=0.2)
+        await asyncio.sleep(0.4)  # any timer has fired by now
+
+    assert not h.down(InterruptionFrame)
+    assert not h.events("interrupted")
+
+
+async def test_short_sound_ended_before_threshold_does_not_interrupt():
+    async with TM() as h:
+        await h.bot_starts()
+        await h.send(VADUserStartedSpeakingFrame(start_secs=0.2), UP)
+        await h.send(VADUserStoppedSpeakingFrame(stop_secs=0.2), UP)  # it stopped
+        h.clock.advance(1.0)
+        await asyncio.sleep(0.4)
+
+    assert not h.down(InterruptionFrame)

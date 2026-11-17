@@ -225,7 +225,7 @@ Runs the spec §7a automated Definition-of-done checks against a running engine:
 | check | threshold |
 |---|---|
 | latency | median `turn_metrics.total_ms` ≤ 1000, p90 ≤ 1500, over ≥ 10 turns from the plain-turn phase only, at default config |
-| interruption | speech onset → `interrupted` ≤ 300 ms |
+| interruption | speech onset → the bot's audio, as received on its track, goes quiet ≤ 300 ms (and an `interrupted` event is sent; its time is shown too) |
 | uh-huh | "uh-huh" during bot speech → no `interrupted` |
 | backchannel timing | none in the first 2 s of a user turn, none closer than `MIN_GAP_S["normal"]` (5 s) |
 | history | `history_roles.backchannel_like` = 0 and assistant messages ≤ replies |
@@ -249,3 +249,16 @@ Deepgram, Anthropic and Cartesia keys, which were not available when this was bu
 e2e script once keys exist; if latency fails, tune the `EAGERNESS` mapping and the Deepgram
 endpointing and record the final values here. Then do the owner listening session in
 `docs/listening-checklist.md`.
+
+**Interruption vs "uh-huh": a known trade-off.** While the bot speaks, the child's speech
+interrupts it as soon as (a) its interim transcript has a word that is not a backchannel, or
+(b) it has lasted `INTERRUPT_SPEECH_MS` (250 ms, in `src/voice_engine/interruption.py`)
+with no transcript yet. A timer checks (b) at exactly 250 ms instead of waiting for the next
+VAD tick (every 200 ms), so the stop can land within the 300 ms the spec asks for. Deepgram's
+first interim usually arrives later than 250 ms, so an "uh-huh" or "mm-hmm" longer than that
+stops the bot unless its interim came first; a short "mm" does not. This follows spec §6.4
+(speech past ~300 ms is a real interruption) but works against the "uh-huh doesn't stop it"
+goal, and the e2e run may show one of the two checks failing. Neither is verified live yet.
+To favour backchannels, raise `INTERRUPT_SPEECH_MS` (e.g. 400–600): the stop then takes that
+long plus playback. How long the browser keeps playing audio it has already received after
+the stop is also unmeasured until the e2e run (it measures the received track).

@@ -39,6 +39,9 @@ MIN_TURNS = 10
 MEDIAN_MAX_MS = 1000
 P90_MAX_MS = 1500
 INTERRUPT_MAX_MS = 300
+# The bot's audio has stopped once it stays quiet this long (longer than a pause
+# between sentences; shorter than the child's interrupting line plus the reply).
+BOT_QUIET_S = 1.0
 GAP_JITTER_S = 0.05  # allowed spread in data-channel delivery between two events
 
 RUN_KEYS = ["ENGINE_API_KEY", "DEEPGRAM_API_KEY", "ANTHROPIC_API_KEY", "CARTESIA_API_KEY"]
@@ -103,15 +106,42 @@ def check_latency(
     return CheckResult("latency", ok, f"median={median}ms p90={p90}ms n={len(totals)}", threshold)
 
 
-def check_interruption(events: Events, onset_t: float, max_ms: int = INTERRUPT_MAX_MS) -> CheckResult:
-    threshold = f"speech onset -> interrupted <= {max_ms}ms"
+def audio_stop_time(bot_audio: list[float], onset_t: float, quiet_s: float = BOT_QUIET_S) -> float | None:
+    """When the bot's audio stopped after `onset_t`: the end of the last loud frame
+    before the first silence of at least `quiet_s`. `bot_audio` holds the end times
+    of loud frames received on the bot's track. None if the bot was not audible at
+    onset (no loud frame in the `quiet_s` before it)."""
+    ends = sorted(bot_audio)
+    before = [t for t in ends if t <= onset_t]
+    if not before or onset_t - before[-1] >= quiet_s:
+        return None
+    last = before[-1]
+    for t in ends:
+        if t <= onset_t:
+            continue
+        if t - last >= quiet_s:
+            break
+        last = t
+    return last
+
+
+def check_interruption(
+    events: Events, onset_t: float, bot_audio: list[float], max_ms: int = INTERRUPT_MAX_MS
+) -> CheckResult:
+    """Speech onset -> the bot's received audio goes quiet (spec §7a), and an
+    `interrupted` event was sent. Measured on the audio, not the event."""
+    threshold = f"speech onset -> bot audio stops <= {max_ms}ms"
     if _state_at(events, onset_t) != "speaking":
         return CheckResult("interruption", False, "bot was not speaking at speech onset", threshold)
     after = [t for t, _ in _of_type(events, "interrupted") if t >= onset_t]
     if not after:
         return CheckResult("interruption", False, "no interrupted event", threshold)
-    ms = round((after[0] - onset_t) * 1000)
-    return CheckResult("interruption", ms <= max_ms, f"{ms}ms", threshold)
+    event_ms = round((after[0] - onset_t) * 1000)
+    stop = audio_stop_time(bot_audio, onset_t)
+    if stop is None:
+        return CheckResult("interruption", False, f"bot audio not audible at onset (event {event_ms}ms)", threshold)
+    ms = max(0, round((stop - onset_t) * 1000))
+    return CheckResult("interruption", ms <= max_ms, f"{ms}ms (event {event_ms}ms)", threshold)
 
 
 def check_uhhuh(events: Events, start_t: float, end_t: float) -> CheckResult:
@@ -268,6 +298,11 @@ def _last_loud_sample(pcm: bytes, threshold: int = SILENCE_THRESHOLD) -> int:
     return -1
 
 
+def frame_is_loud(pcm: bytes, threshold: int = SILENCE_THRESHOLD) -> bool:
+    """A frame of the bot's audio (16-bit PCM) carries sound, not silence."""
+    return first_loud_sample(pcm, threshold) is not None
+
+
 def place_onset(pcm: bytes, onset_s: float, rate: int) -> bytes:
     """Trim leading silence and pad so speech starts exactly `onset_s` in."""
     first = first_loud_sample(pcm)
@@ -420,6 +455,13 @@ class Scenario:
         self.uhhuh_window: tuple[float, float] | None = None
         self.latency_window: tuple[float, float] | None = None
         self.track = None
+        self.bot_audio: list[float] = []  # end times of loud frames on the bot's track
+
+    def on_bot_frame(self, frame) -> None:
+        """Note a frame of the bot's audio as it is received (decoded, at receipt)."""
+        n = frame.samples * len(frame.layout.channels) * 2
+        if frame_is_loud(bytes(frame.planes[0])[:n]):
+            self.bot_audio.append(time.monotonic() + frame.samples / frame.sample_rate)
 
     def on_message(self, message) -> None:
         if not isinstance(message, str):
@@ -510,7 +552,7 @@ def results_for(sc: Scenario, history_roles: Mapping[str, int] | None) -> list[C
     if sc.interrupt_onset is None:
         results.append(CheckResult("interruption", False, "scenario did not run", f"<= {INTERRUPT_MAX_MS}ms"))
     else:
-        results.append(check_interruption(sc.events, sc.interrupt_onset))
+        results.append(check_interruption(sc.events, sc.interrupt_onset, sc.bot_audio))
     if sc.uhhuh_window is None:
         results.append(CheckResult("uh-huh", False, "scenario did not run", "no interrupted"))
     else:
@@ -548,10 +590,10 @@ async def run_e2e(base_url: str, api_key: str, fixtures: dict[str, bytes]) -> li
 
         @pc.on("track")
         def _on_track(track) -> None:
-            async def drain() -> None:  # the bot's audio; read so it does not pile up
+            async def drain() -> None:  # the bot's audio: when it is loud, for the stop time
                 try:
                     while True:
-                        await track.recv()
+                        sc.on_bot_frame(await track.recv())
                 except MediaStreamError:
                     pass
 

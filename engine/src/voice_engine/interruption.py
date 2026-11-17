@@ -14,6 +14,13 @@ BACKCHANNEL_WORDS: frozenset[str] = frozenset(
 )
 
 _MAX_BACKCHANNEL_TOKENS = 3
+
+# Speech over the bot with no transcript yet becomes an interruption once it has
+# lasted this long (spec §6.4: "speech that lasts >= a threshold (~300 ms, tunable)").
+# Set below 300 so the stop can land within 300 ms of speech onset (spec §7a); the
+# STT's first interim usually comes later than this, so a backchannel longer than
+# this ("uh-huuuh") stops the bot unless its interim has already arrived. Tune here.
+INTERRUPT_SPEECH_MS = 250
 _LAUGH = re.compile(r"^(?:ha|he){2,}h?$")  # "haha", "hehehe"; not "he"
 
 
@@ -65,7 +72,7 @@ def classify_user_speech(
     speech_ms: int,
     *,
     min_speech_ms: int = 200,
-    no_text_ms: int = 600,
+    no_text_ms: int = INTERRUPT_SPEECH_MS,
 ) -> Literal["undecided", "backchannel", "interruption"]:
     if speech_ms < min_speech_ms:
         return "undecided"

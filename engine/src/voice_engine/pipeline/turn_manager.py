@@ -67,7 +67,7 @@ from voice_engine.backchannel import (
 )
 from voice_engine.config import SessionConfig
 from voice_engine.history import CUT_MARKER, PlayedWord, SpokenSentence, truncate_reply
-from voice_engine.interruption import classify_user_speech
+from voice_engine.interruption import INTERRUPT_SPEECH_MS, classify_user_speech
 from voice_engine.pipeline.events import event_frame
 from voice_engine.pipeline.prerender import SAMPLE_RATE
 
@@ -129,6 +129,7 @@ class TurnManager(FrameProcessor):
         self._heard = ""  # latest transcript (interim or final) of this user turn
         self._user_turn = False
         self._clip_task: asyncio.Task | None = None
+        self._barge_timer: asyncio.Task | None = None
 
     def verdict_tap(self) -> FrameProcessor:
         return _Tap(self._on_verdict_frame)
@@ -146,14 +147,17 @@ class TurnManager(FrameProcessor):
             self._on_bot_frame(frame, now)
         elif isinstance(frame, InterruptionFrame):
             self._cancel_clip()
+            self._cancel_barge_timer()
         elif isinstance(frame, VADUserStartedSpeakingFrame):
             self._speech_start = now - frame.start_secs
             self._heard = ""  # a late final from earlier speech is not this speech
             self._cancel_clip()
             await self._check_barge_in(now)
+            self._start_barge_timer(now)
         elif isinstance(frame, UserSpeakingFrame):
             await self._check_barge_in(now)
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
+            self._cancel_barge_timer()
             if self._speech_start is not None:
                 self._last_speech_ms = int((now - frame.stop_secs - self._speech_start) * 1000)
             self._speech_start = None
@@ -182,11 +186,13 @@ class TurnManager(FrameProcessor):
                     await self._interrupt(now)
         elif isinstance(frame, (EndFrame, CancelFrame)):
             self._cancel_clip()
+            self._cancel_barge_timer()
 
         await self.push_frame(frame, direction)
 
     async def cleanup(self) -> None:
         self._cancel_clip()
+        self._cancel_barge_timer()
         await super().cleanup()
 
     # ----- barge-in -----
@@ -201,6 +207,26 @@ class TurnManager(FrameProcessor):
             return
         if classify_user_speech(self._heard, self._speech_ms(now)) == "interruption":
             await self._interrupt(now)
+
+    def _start_barge_timer(self, now: float) -> None:
+        """VAD reports speech activity only every 200 ms; check again exactly when
+        the speech reaches INTERRUPT_SPEECH_MS, so the stop is not late by a tick."""
+        self._cancel_barge_timer()
+        if not self.reply_open or self._speech_start is None:
+            return
+        due = self._speech_start + INTERRUPT_SPEECH_MS / 1000
+        self._barge_timer = asyncio.create_task(self._barge_in_at(due, max(0.0, due - now)))
+
+    async def _barge_in_at(self, due: float, delay: float) -> None:
+        await asyncio.sleep(delay)
+        self._barge_timer = None
+        if self._speech_start is not None:
+            await self._check_barge_in(max(self._clock(), due))
+
+    def _cancel_barge_timer(self) -> None:
+        timer, self._barge_timer = self._barge_timer, None
+        if timer is not None and timer is not asyncio.current_task():
+            timer.cancel()
 
     async def _interrupt(self, now: float) -> None:
         played_ms = int((now - self._reply_start) * 1000) if self._reply_start is not None else 0

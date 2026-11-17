@@ -80,31 +80,67 @@ def test_latency_matches_engine_summary():
 # ---------- 2. interruption ----------
 
 
-def test_interruption_pass():
-    events = [state(1.0, "speaking"), interrupted(10.25)]
-    r = e2e.check_interruption(events, onset_t=10.0)
-    assert r.passed and "250" in r.measured
+def talking(start, end, step=0.02):
+    """End times of loud 20 ms bot-audio frames received from `start` to `end`."""
+    n = round((end - start) / step)
+    return [round(start + step * (i + 1), 6) for i in range(n)]
 
 
-def test_interruption_too_slow():
-    events = [state(1.0, "speaking"), interrupted(10.31)]
-    assert not e2e.check_interruption(events, onset_t=10.0).passed
+def test_interruption_measured_on_the_bot_audio():
+    """The stop is when the bot's audio goes quiet, not when the event fires."""
+    events = [state(1.0, "speaking"), interrupted(10.05)]
+    audio = talking(8.0, 10.26) + talking(13.0, 14.0)  # quiet from 10.26 until the next reply
+    r = e2e.check_interruption(events, onset_t=10.0, bot_audio=audio)
+    assert r.passed and r.measured.startswith("260ms"), r.measured
+
+
+def test_interruption_fails_when_audio_runs_on_after_the_event():
+    events = [state(1.0, "speaking"), interrupted(10.05)]  # the event alone would pass
+    audio = talking(8.0, 10.6)
+    r = e2e.check_interruption(events, onset_t=10.0, bot_audio=audio)
+    assert not r.passed and r.measured.startswith("600ms"), r.measured
+
+
+def test_interruption_sentence_gap_is_not_a_stop():
+    """A short silence between sentences after onset is not where the bot stopped."""
+    events = [state(1.0, "speaking"), interrupted(10.5)]
+    audio = talking(8.0, 10.1) + talking(10.5, 10.7)  # 400 ms gap, then more speech
+    r = e2e.check_interruption(events, onset_t=10.0, bot_audio=audio)
+    assert not r.passed and r.measured.startswith("700ms"), r.measured
+
+
+def test_interruption_needs_audible_bot_at_onset():
+    events = [state(1.0, "speaking"), interrupted(10.1)]
+    audio = talking(5.0, 7.0)  # silent for 3 s before onset
+    r = e2e.check_interruption(events, onset_t=10.0, bot_audio=audio)
+    assert not r.passed and "not audible" in r.measured
+
+
+def test_interruption_needs_bot_audio():
+    events = [state(1.0, "speaking"), interrupted(10.1)]
+    r = e2e.check_interruption(events, onset_t=10.0, bot_audio=[])
+    assert not r.passed
 
 
 def test_interruption_missing():
     events = [state(1.0, "speaking")]
-    assert not e2e.check_interruption(events, onset_t=10.0).passed
+    assert not e2e.check_interruption(events, onset_t=10.0, bot_audio=talking(8.0, 10.1)).passed
 
 
 def test_interruption_ignores_earlier_interruptions():
     events = [state(1.0, "speaking"), interrupted(5.0)]
-    assert not e2e.check_interruption(events, onset_t=10.0).passed
+    assert not e2e.check_interruption(events, onset_t=10.0, bot_audio=talking(8.0, 10.1)).passed
 
 
 def test_interruption_needs_bot_speaking_at_onset():
     events = [state(1.0, "speaking"), state(9.0, "listening"), interrupted(10.1)]
-    r = e2e.check_interruption(events, onset_t=10.0)
+    r = e2e.check_interruption(events, onset_t=10.0, bot_audio=talking(8.0, 10.1))
     assert not r.passed and "not speaking" in r.measured
+
+
+def test_loud_frame_detection():
+    assert e2e.frame_is_loud(pcm([0, 10, -20] * 100))  is False
+    assert e2e.frame_is_loud(pcm([0, 10, 4000] * 100)) is True
 
 
 # ---------- 3. "uh-huh" does not interrupt ----------
@@ -287,9 +323,11 @@ def test_latency_boundary_exactly_1000_median_1500_p90():
 
 
 def test_interruption_boundary_exactly_300ms():
-    events = [state(1.0, "speaking"), interrupted(10.3)]
-    r = e2e.check_interruption(events, onset_t=10.0)
-    assert r.passed and r.measured == "300ms", r.measured
+    events = [state(1.0, "speaking"), interrupted(10.1)]
+    r = e2e.check_interruption(events, onset_t=10.0, bot_audio=talking(8.0, 10.3))
+    assert r.passed and r.measured.startswith("300ms"), r.measured
+    r = e2e.check_interruption(events, onset_t=10.0, bot_audio=talking(8.0, 10.32))
+    assert not r.passed
 
 
 def test_backchannel_boundary_exactly_2s_into_turn():
