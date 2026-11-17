@@ -102,7 +102,12 @@ curl -s -X PATCH http://127.0.0.1:7860/sessions/$SID \
 
 ### `DELETE /sessions/{id}` → 204
 
-Stops the conversation (reason `deleted`) and removes the session.
+Stops the conversation (reason `deleted`) and ends the session.
+
+When a session ends (for any reason) the engine releases its pipeline, models and
+conversation at once. The ended session stays readable through `GET /sessions/{id}`
+(status `ended`) for an hour, then returns 404; so does a session whose client token
+expired unused.
 
 ### `POST /sessions/{id}/commands` → 202
 

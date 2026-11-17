@@ -194,7 +194,10 @@ def create_app(settings: Settings, store: SessionStore, runner_factory: RunnerFa
         }
         if os.environ.get("DEBUG") == "1":
             # Debug only (used by scripts/e2e.py): message counts per role, never text.
-            out["history_roles"] = s.runner.history_roles() if s.runner is not None else {}
+            if s.runner is not None:
+                out["history_roles"] = s.runner.history_roles()
+            else:  # not connected yet, or ended (counts kept from the end)
+                out["history_roles"] = s.history_roles or {}
         return out
 
     @app.patch("/sessions/{id}", dependencies=auth)

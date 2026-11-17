@@ -63,6 +63,10 @@ class SafetyClassifier:
         self._client = client
         self._model = model
 
+    async def aclose(self) -> None:
+        """Close the HTTP client (called when the session ends)."""
+        await self._client.close()
+
     async def classify(self, text: str) -> SafetyFlag | None:
         """Return a flag, or None if safe. Never raises; errors are logged (type only)."""
         try:

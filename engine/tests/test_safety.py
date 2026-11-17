@@ -79,3 +79,9 @@ async def test_live_examples():
         assert await classifier.classify(text) is not None, text
     for text in negatives:
         assert await classifier.classify(text) is None, text
+
+
+async def test_aclose_closes_the_client():
+    client = anthropic.AsyncAnthropic(api_key="test-key")
+    await SafetyClassifier(client).aclose()
+    assert client.is_closed()

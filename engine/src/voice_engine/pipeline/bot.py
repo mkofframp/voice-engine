@@ -279,6 +279,8 @@ class SessionRunner:
         self._last_vad_stop: float | None = None
         self._vad_stop_secs = 0.0
         self._context: LLMContext | None = None
+        self._classifier: Any = None
+        self._final_roles: dict[str, int] = {}  # counts kept after teardown
 
     # ----- lifecycle -----
 
@@ -390,7 +392,9 @@ class SessionRunner:
 
     async def _load_clips(self, cfg: SessionConfig) -> None:
         try:
-            self._turn_manager.clip_bank = await self._cache.backchannel_bank(cfg)
+            bank = await self._cache.backchannel_bank(cfg)
+            if self._turn_manager is not None:  # None once the session has ended
+                self._turn_manager.clip_bank = bank
         except Exception:
             log.warning("backchannel clips unavailable; listening without them")
 
@@ -424,13 +428,33 @@ class SessionRunner:
                 },
             )
         finally:
+            self._final_roles = self.history_roles()
             self._store.end(self.session.id, reason)
             self.finished.set()
+            await self._release()
+
+    async def _release(self) -> None:
+        """Drop the pipeline, models, clients and conversation of an ended session."""
+        classifier, self._classifier = self._classifier, None
+        close = getattr(classifier, "aclose", None)
+        if close is not None:
+            try:
+                await close()
+            except Exception:
+                log.warning("session %s: could not close the classifier client", self.session.id)
+        self._worker = None
+        self._run_task = None
+        self._context = None
+        self._turn_manager = None
+        self._adapter = None
+        self._mic = None
+        self._turn_tap = self._llm_tap = self._sink = None
+        self._services = None
 
     def history_roles(self) -> dict[str, int]:
         """Messages per role plus `backchannel_like`, with no text (for DEBUG reads)."""
         if self._context is None:
-            return {}
+            return dict(self._final_roles)
         return count_history(self._context.get_messages())
 
     async def stop(self, reason: str) -> None:
@@ -482,6 +506,8 @@ class SessionRunner:
         await self._worker.queue_frame(frame)
 
     async def command(self, cmd: dict) -> None:
+        if self.finished.is_set():
+            return  # ended; the pipeline is gone
         kind = cmd.get("type")
         if kind == "say":
             await self.queue_frame(TTSSpeakFrame(cmd["text"], append_to_context=True))

@@ -212,6 +212,10 @@ class FakeClassifier:
         self.flag = flag
         self.seen: list[str] = []
         self.hang = False
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
 
     async def classify(self, text: str) -> SafetyFlag | None:
         self.seen.append(text)
@@ -750,3 +754,31 @@ async def test_add_context_mid_conversation_is_marked_as_not_the_child():
     assert len(note) == 1
     assert note[0]["role"] == "user"
     assert "not the child" in note[0]["content"]
+
+
+# ---------- I2: an ended session lets go of its pipeline ----------
+
+
+async def test_ended_session_releases_runner_pipeline_and_context():
+    h = Harness(responses=[["[happy] Hi there!"]])
+    await h.start()
+    await h.say("hello")
+    await h.wait_for(lambda: h.runner.history_roles().get("assistant") == 1)
+    await h.stop()
+
+    stored = h.store.get(h.session.id)
+    assert stored.status == "ended"
+    assert stored.runner is None  # the store no longer holds the runner
+    r = h.runner
+    assert r._worker is None and r._context is None and r._turn_manager is None
+    assert r._classifier is None and h.classifier.closed
+    # Counts taken before teardown survive (e2e reads them after the end).
+    assert r.history_roles()["assistant"] == 1
+    assert stored.history_roles["assistant"] == 1
+
+
+async def test_session_that_never_started_ends_cleanly():
+    h = Harness(responses=[])
+    await h.runner.stop("deleted")
+    assert h.store.get(h.session.id).runner is None
+    assert h.runner.history_roles() == {}

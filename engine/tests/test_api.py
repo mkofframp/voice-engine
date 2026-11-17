@@ -262,3 +262,18 @@ def test_history_roles_in_debug_before_connect(env, monkeypatch):
     sid = make(client)["session_id"]
     got = client.get(f"/sessions/{sid}", headers=AUTH).json()
     assert got["history_roles"] == {}
+
+
+def test_history_roles_in_debug_after_end(env, monkeypatch):
+    """After DELETE the runner is gone; the counts taken at the end are still read."""
+    client, store, *_ = env
+    monkeypatch.setenv("DEBUG", "1")
+    body = make(client)
+    assert connect(client, body["client_token"]).status_code == 200
+    s = store.get(body["session_id"])
+    s.runner = ContextRunner(s)
+    assert client.delete(f"/sessions/{body['session_id']}", headers=AUTH).status_code == 204
+    assert s.runner is None
+    got = client.get(f"/sessions/{body['session_id']}", headers=AUTH).json()
+    assert got["status"] == "ended"
+    assert got["history_roles"] == {"user": 1, "assistant": 2, "backchannel_like": 1}
