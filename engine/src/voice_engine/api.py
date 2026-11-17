@@ -26,6 +26,22 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 DEVPAGE_DIR = _REPO_ROOT / "devpage"
 BROWSER_BUNDLE = _REPO_ROOT / "client" / "dist-browser" / "client.js"
 _LOOPBACK = {"127.0.0.1", "::1"}
+_LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "[::1]"}
+_NO_STORE = {"Cache-Control": "no-store"}
+
+
+def _host_hostname(host_header: str) -> str:
+    h = host_header.strip().lower()
+    if h.startswith("["):
+        return h.split("]", 1)[0] + "]"
+    return h.rsplit(":", 1)[0] if ":" in h else h
+
+
+def _dev_file(path: Path) -> FileResponse:
+    if not path.is_file():
+        raise HTTPException(status_code=404)
+    return FileResponse(path, media_type="text/javascript" if path.suffix == ".js" else "text/html",
+                        headers=_NO_STORE)
 
 
 class _PathScopedCORS:
@@ -133,32 +149,34 @@ def create_app(settings: Settings, store: SessionStore, runner_factory: RunnerFa
     def require_loopback(request: Request) -> None:
         if request.client is None or request.client.host not in _LOOPBACK:
             raise HTTPException(status_code=404)
+        # DNS-rebinding guard: the Host header must name a local host (any port).
+        if _host_hostname(request.headers.get("host", "")) not in _LOCAL_HOSTNAMES:
+            raise HTTPException(status_code=404)
 
     dev = [Depends(require_loopback)]
 
     @app.get("/dev", dependencies=dev)
     async def dev_page():
-        return FileResponse(DEVPAGE_DIR / "index.html", media_type="text/html")
+        return _dev_file(DEVPAGE_DIR / "index.html")
 
     @app.get("/dev/devpage.js", dependencies=dev)
     async def dev_script():
-        return FileResponse(DEVPAGE_DIR / "devpage.js", media_type="text/javascript")
+        return _dev_file(DEVPAGE_DIR / "devpage.js")
 
     @app.get("/dev/copy.json", dependencies=dev)
     async def dev_copy():
         keys = ("connect", "disconnect", "config_editor", "event_log", "metrics")
-        return {k: copy.get("devpage." + k) for k in keys}
+        return JSONResponse({k: copy.get("devpage." + k) for k in keys}, headers=_NO_STORE)
 
     @app.get("/dev/config.json", dependencies=dev)
     async def dev_config():
-        return SessionConfig().model_dump(mode="json")
+        return JSONResponse(SessionConfig().model_dump(mode="json"), headers=_NO_STORE)
 
     @app.get("/dev/client.js", dependencies=dev)
     async def dev_client():
         if not BROWSER_BUNDLE.is_file():
             _log.warning("dev client bundle missing; run `npm run build:browser` in client/")
-            raise HTTPException(status_code=404)
-        return FileResponse(BROWSER_BUNDLE, media_type="text/javascript")
+        return _dev_file(BROWSER_BUNDLE)
 
     @app.post("/dev/api/session", status_code=201, dependencies=dev)
     async def dev_create_session(body: dict):

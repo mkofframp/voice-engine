@@ -46,6 +46,16 @@ function setConnected(on) {
 }
 
 $("connect").onclick = async () => {
+  if (client) return;
+  $("connect").disabled = true;
+  try {
+    await connectSession();
+  } finally {
+    if (!client) setConnected(false);
+  }
+};
+
+async function connectSession() {
   let config;
   try {
     config = JSON.parse($("config").value);
@@ -71,19 +81,22 @@ $("connect").onclick = async () => {
     return;
   }
   totals.length = 0;
-  client = new mod.VoiceEngineClient({ engineUrl: location.origin, clientToken: body.client_token });
-  client.onAny((e) => {
+  const c = new mod.VoiceEngineClient({ engineUrl: location.origin, clientToken: body.client_token });
+  client = c;
+  c.onAny((e) => {
     log(e.type, e);
     if (e.type === "turn_metrics") renderMetrics(e);
   });
   try {
-    await client.connect();
+    await c.connect();
     $("status").textContent = body.session_id;
     setConnected(true);
   } catch (err) {
     log("connect", String(err));
+    try { c.disconnect(); } catch {}
+    client = null;
   }
-};
+}
 
 $("disconnect").onclick = () => {
   if (client) client.disconnect();

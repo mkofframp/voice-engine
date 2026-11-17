@@ -20,14 +20,18 @@ def build():
 
 def local():
     app, store = build()
-    return TestClient(app, client=("127.0.0.1", 50000)), store
+    return TestClient(app, base_url="http://localhost:7860", client=("127.0.0.1", 50000)), store
 
 
-DEV_GETS = ["/dev", "/dev/copy.json", "/dev/client.js"]
+DEV_GETS = ["/dev", "/dev/copy.json", "/dev/config.json", "/dev/devpage.js", "/dev/client.js"]
 
 
 @pytest.mark.parametrize("host", ["10.0.0.5", "203.0.113.9", "testclient"])
-async def test_dev_localhost_only(host):
+async def test_dev_localhost_only(host, monkeypatch, tmp_path):
+    from voice_engine import api
+    bundle = tmp_path / "client.js"
+    bundle.write_text("export const x = 1;")
+    monkeypatch.setattr(api, "BROWSER_BUNDLE", bundle)
     app, _ = build()
     transport = httpx.ASGITransport(app=app, client=(host, 1234))
     async with httpx.AsyncClient(transport=transport, base_url="http://x") as c:
@@ -52,7 +56,7 @@ def test_dev_loopback_serves_page_and_copy():
 
 def test_dev_ipv6_loopback():
     app, _ = build()
-    c = TestClient(app, client=("::1", 1))
+    c = TestClient(app, base_url="http://[::1]:7860", client=("::1", 1))
     assert c.get("/dev").status_code == 200
 
 
@@ -92,3 +96,37 @@ def test_dev_session_validation_error_shape():
     body = r.json()
     assert body["error"] == "invalid_request"
     assert "details" in body
+
+
+def test_dev_loopback_serves_every_get_route(monkeypatch, tmp_path):
+    from voice_engine import api
+    bundle = tmp_path / "client.js"
+    bundle.write_text("export const x = 1;")
+    monkeypatch.setattr(api, "BROWSER_BUNDLE", bundle)
+    c, _ = local()
+    for path in DEV_GETS:
+        r = c.get(path)
+        assert r.status_code == 200, path
+        assert r.headers["cache-control"] == "no-store", path
+
+
+def test_dev_missing_devpage_file_is_404(monkeypatch, tmp_path):
+    from voice_engine import api
+    monkeypatch.setattr(api, "DEVPAGE_DIR", tmp_path)
+    c, _ = local()
+    assert c.get("/dev").status_code == 404
+    assert c.get("/dev/devpage.js").status_code == 404
+
+
+@pytest.mark.parametrize("host", ["evil.example", "evil.example:7860", "127.0.0.1.evil.example"])
+def test_dev_rejects_foreign_host_header(host):
+    c, _ = local()
+    for path in DEV_GETS:
+        assert c.get(path, headers={"Host": host}).status_code == 404, path
+    assert c.post("/dev/api/session", json={}, headers={"Host": host}).status_code == 404
+
+
+@pytest.mark.parametrize("host", ["localhost", "localhost:7860", "127.0.0.1:9", "[::1]:7860"])
+def test_dev_accepts_local_host_header(host):
+    c, _ = local()
+    assert c.get("/dev", headers={"Host": host}).status_code == 200
