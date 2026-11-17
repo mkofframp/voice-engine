@@ -601,3 +601,17 @@ async def test_datachannel_command_forwarded():
     assert h.runner._mic.muted is False
     assert not h.runner.finished.is_set()
     await h.stop()
+
+
+async def test_datachannel_invalid_type_not_logged(caplog):
+    import logging
+
+    h = Harness(responses=[])
+    await h.start()
+    with caplog.at_level(logging.DEBUG, logger="voice_engine"):
+        await h.transport.fire("on_app_message", {"type": "evil\nINJECTED line"}, "peer")
+        await h.transport.fire("on_app_message", {"type": "say"}, "peer")
+    await h.stop()
+    assert "INJECTED" not in caplog.text
+    assert "evil" not in caplog.text
+    assert "ignored invalid data channel message" in caplog.text

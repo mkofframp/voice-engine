@@ -38,7 +38,10 @@ export async function createWebRtcTransport(opts: WebRtcTransportOptions): Promi
       } catch {
         return;
       }
-      if (typeof parsed === "object" && parsed !== null && (parsed as { type?: unknown }).type === "signalling") {
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return;
+      const type = (parsed as { type?: unknown }).type;
+      if (typeof type !== "string") return;
+      if (type === "signalling") {
         super.handleMessage(message);
         return;
       }

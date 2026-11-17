@@ -492,12 +492,13 @@ class SessionRunner:
         try:
             cmd = command_adapter.validate_python(message)
         except ValidationError:
-            # Log the shape only, never the content.
+            # Never log client text: only a known command type, else "unknown".
             kind = message.get("type") if isinstance(message, dict) else None
-            log.warning(
+            known = {"say", "add_context", "end", "mute_mic", "unmute_mic"}
+            log.debug(
                 "session %s ignored invalid data channel message (type=%s)",
                 self.session.id,
-                kind if isinstance(kind, str) and len(kind) <= 32 else type(kind).__name__,
+                kind if isinstance(kind, str) and kind in known else "unknown",
             )
             return
         try:

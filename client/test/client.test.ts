@@ -4,12 +4,8 @@ import { VoiceEngineClient, type EngineEvent, type EngineTransport } from "../sr
 class FakeTransport implements EngineTransport {
   sent: unknown[] = [];
   connected = false;
-  offers: unknown[] = [];
   private msg: (m: unknown) => void = () => {};
-  constructor(private clientToken: string) {}
   async connect() {
-    // The real transport posts the offer with the token; the fake records it.
-    this.offers.push({ sdp: "x", type: "offer", client_token: this.clientToken });
     this.connected = true;
   }
   disconnect() {
@@ -28,7 +24,7 @@ class FakeTransport implements EngineTransport {
 }
 
 async function setup() {
-  const transport = new FakeTransport("tok-1");
+  const transport = new FakeTransport();
   const client = new VoiceEngineClient({ engineUrl: "http://e", clientToken: "tok-1", transport });
   await client.connect();
   return { transport, client };
@@ -60,10 +56,9 @@ describe("VoiceEngineClient", () => {
     expect(seen).toEqual(["listening"]);
   });
 
-  it("test_offer_includes_token", async () => {
+  it("connects the injected transport", async () => {
     const { transport } = await setup();
     expect(transport.connected).toBe(true);
-    expect(transport.offers).toEqual([{ sdp: "x", type: "offer", client_token: "tok-1" }]);
   });
 
   it("test_unknown_event_type_ignored_not_thrown", async () => {
