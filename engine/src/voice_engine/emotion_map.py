@@ -41,7 +41,7 @@ def _clamp(v: float, lo_hi: tuple[float, float]) -> float:
 def map_emotion(tag: str, intensity: int, base_speed: float) -> TTSControls:
     entry = _MAP.get(tag)
     if entry is None:
-        log.warning("unknown emotion tag %r, using neutral", tag)
+        log.warning("unknown emotion tag, using neutral")  # the tag is model text: not logged
         entry, intensity = _MAP["neutral"], 0
     k = max(0, min(100, intensity)) / 100
     speed = base_speed * (1 + (entry["speed_factor"] - 1) * k)

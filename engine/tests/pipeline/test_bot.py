@@ -228,9 +228,17 @@ class FakeCache:
     def __init__(self) -> None:
         self.requested: list[str] = []
 
+        self.banks: list[tuple[str, float]] = []  # (voice_id, speaking_speed) per bank render
+
     async def fixed_line(self, key, cfg) -> bytes:
         self.requested.append(key)
         return GOODBYE_CLIP
+
+    async def backchannel_bank(self, cfg):
+        from voice_engine.backchannel import ClipBank
+
+        self.banks.append((cfg.voice_id, cfg.speaking_speed))
+        return ClipBank({})
 
 
 # ---------- harness ----------
@@ -782,3 +790,56 @@ async def test_session_that_never_started_ends_cleanly():
     await h.runner.stop("deleted")
     assert h.store.get(h.session.id).runner is None
     assert h.runner.history_roles() == {}
+
+
+async def test_upstream_error_text_not_logged(caplog):
+    """M9: an upstream error message is free text; only its type is logged."""
+    import logging
+
+    h = Harness(responses=[[RuntimeError("leaked words here")]])
+    await h.start()
+    with caplog.at_level(logging.DEBUG, logger="voice_engine"):
+        await h.say("hello")
+        await h.wait_for(lambda: "error" in event_types(h))
+    await h.stop()
+    assert "leaked words" not in caplog.text
+    assert "upstream error" in caplog.text
+
+
+async def test_background_tasks_cancelled_at_end():
+    """M8: nothing of an ended session keeps running."""
+    h = Harness(responses=[])
+    await h.start()
+    task = h.runner._spawn(asyncio.sleep(3600))
+    await h.stop()
+    await asyncio.sleep(0)
+    assert task.cancelled()
+
+
+async def test_goodbye_line_warmed_at_start():
+    """M3: the goodbye is rendered while the session starts, not at the end."""
+    h = Harness(responses=[])
+    await h.start()
+    try:
+        await h.wait_for(lambda: "goodbye" in h.cache.requested, timeout=1)
+    finally:
+        await h.stop()
+
+
+async def test_voice_or_speed_patch_rerenders_backchannel_bank():
+    """M1: "mm-hm" clips follow a voice or speed change."""
+    h = Harness(responses=[["[happy] One."], ["[happy] Two."], ["[happy] Three."]])
+    await h.start()
+    try:
+        await h.wait_for(lambda: len(h.cache.banks) == 1, timeout=1)
+        h.store.patch(h.session.id, {"speaking_speed": 1.2})
+        await h.say("hello")
+        await h.wait_for(lambda: len(h.cache.banks) == 2, timeout=1)
+        h.store.patch(h.session.id, {"emotion_intensity": 10})  # no audio change: no re-render
+        await h.say("again")
+        await h.wait_for(lambda: len(h.tts.spoken) >= 2, timeout=1)
+        await asyncio.sleep(0.05)
+    finally:
+        await h.stop()
+    assert h.cache.banks[1][1] == 1.2
+    assert len(h.cache.banks) == 2

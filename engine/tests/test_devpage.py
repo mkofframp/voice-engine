@@ -163,3 +163,16 @@ def test_non_dev_routes_ignore_host_check():
     assert r.status_code == 401
     r = c.post("/sessions", json={}, headers={"Host": "evil.example", "Authorization": f"Bearer {KEY}"})
     assert r.status_code == 201
+
+
+def test_dev_session_needs_json_content_type():
+    """M7: a cross-site page can POST a body with no type (no preflight); refuse it."""
+    c, store = local()
+    before = len(store._sessions)
+    r = c.post("/dev/api/session", content=b"{}")  # no content-type
+    assert r.status_code == 415
+    r = c.post("/dev/api/session", content=b"{}", headers={"content-type": "text/plain"})
+    assert r.status_code == 415
+    assert len(store._sessions) == before
+    r = c.post("/dev/api/session", content=b"{}", headers={"content-type": "application/json; charset=utf-8"})
+    assert r.status_code == 201

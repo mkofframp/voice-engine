@@ -29,3 +29,9 @@ def test_unknown_tag_falls_back(caplog):
         c = map_emotion("angry", 70, 1.0)
     assert c == map_emotion("neutral", 0, 1.0)
     assert len(caplog.records) == 1
+
+
+def test_unknown_tag_text_not_logged(caplog):
+    with caplog.at_level(logging.WARNING):
+        map_emotion("secretword", 70, 1.0)
+    assert "secretword" not in caplog.text

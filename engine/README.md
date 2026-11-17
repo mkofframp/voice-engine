@@ -135,6 +135,11 @@ no API key, the single-use token authorises it. A second connection is refused (
 `session_busy`). `ALLOWED_ORIGINS` is the CORS allow-list: browsers on other origins cannot
 read the response, but the server does not reject a request that has no `Origin` header.
 
+The route takes `POST` only. The JS client gathers all ICE candidates before it sends the
+offer (`waitForICEGathering`), so it never needs the trickle-ICE `PATCH` some Pipecat clients
+send. There is no reconnect: the token is single-use and a dropped connection ends the
+session (`client_disconnected`); create a new session to talk again.
+
 ## Events (data channel → browser)
 
 | type | payload |

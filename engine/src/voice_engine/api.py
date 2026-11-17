@@ -179,7 +179,14 @@ def create_app(settings: Settings, store: SessionStore, runner_factory: RunnerFa
             _log.warning("dev client bundle missing; run `npm run build:browser` in client/")
         return _dev_file(BROWSER_BUNDLE)
 
-    @app.post("/dev/api/session", status_code=201, dependencies=dev)
+    def require_json(request: Request) -> None:
+        # A JSON content type forces a CORS preflight, which a cross-site page
+        # cannot pass; without one, any page could POST here from the browser.
+        ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            raise HTTPException(status_code=415)
+
+    @app.post("/dev/api/session", status_code=201, dependencies=[*dev, Depends(require_json)])
     async def dev_create_session(body: dict):
         out = create_session_internal(body)
         return {"session_id": out["session_id"], "client_token": out["client_token"]}

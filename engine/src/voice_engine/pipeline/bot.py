@@ -391,12 +391,18 @@ class SessionRunner:
         self._spawn(self._load_clips(cfg))
 
     async def _load_clips(self, cfg: SessionConfig) -> None:
+        """Render (or fetch from the cache) the backchannel clips and the goodbye line
+        for this voice and speed, so neither is rendered when it is needed."""
         try:
             bank = await self._cache.backchannel_bank(cfg)
             if self._turn_manager is not None:  # None once the session has ended
                 self._turn_manager.clip_bank = bank
         except Exception:
             log.warning("backchannel clips unavailable; listening without them")
+        try:
+            await self._cache.fixed_line("goodbye", cfg)
+        except Exception:
+            log.warning("goodbye line not pre-rendered; it will be tried at the end")
 
     async def _run(self, worker: PipelineWorker) -> None:
         try:
@@ -435,6 +441,10 @@ class SessionRunner:
 
     async def _release(self) -> None:
         """Drop the pipeline, models, clients and conversation of an ended session."""
+        me = asyncio.current_task()
+        for task in list(self._bg):
+            if task is not me:
+                task.cancel()
         classifier, self._classifier = self._classifier, None
         close = getattr(classifier, "aclose", None)
         if close is not None:
@@ -637,6 +647,8 @@ class SessionRunner:
             await self._llm_tap.push_frame(
                 TTSUpdateSettingsFrame(delta=CartesiaTTSSettings(voice=new.voice_id))
             )
+        if (new.voice_id, new.speaking_speed) != (old.voice_id, old.speaking_speed):
+            self._spawn(self._load_clips(new))  # clips in the new voice and speed
         # turn_eagerness is fixed when the pipeline is built; it takes effect next session.
 
     # ----- side effects -----
@@ -672,7 +684,13 @@ class SessionRunner:
         if frame.fatal:
             self._spawn(self.stop("error"))
             return
-        log.warning("session %s upstream error: %s", self.session.id, frame.error)
+        # Free text from a service; log its type only.
+        cause = getattr(frame, "exception", None)
+        log.warning(
+            "session %s upstream error (%s)",
+            self.session.id,
+            type(cause).__name__ if cause is not None else type(frame).__name__,
+        )
         message = copy.get("errors.upstream_failed")
         await self._emit("error", code="upstream_failed", message=message)
         self._spawn(

@@ -6,7 +6,7 @@ export { EVENT_TYPES } from "./events.js";
 export type { EngineTransport } from "./transport.js";
 
 export interface VoiceEngineClientOptions {
-  /** Base URL of the engine, for example "http://localhost:8080". */
+  /** Base URL of the engine, for example "http://127.0.0.1:7860" (its default). */
   engineUrl: string;
   /** Single-use token issued by the host server (POST /sessions). Never an API key. */
   clientToken: string;
