@@ -1,0 +1,47 @@
+{
+  "redirect_line": "Let's imagine a silly animal! What sound would it make?",
+  "goodbye_line": "Bye for now, friend! I loved chatting with you.",
+  "devpage": {
+    "connect": "Connect",
+    "disconnect": "Disconnect",
+    "config_editor": "Session configuration",
+    "event_log": "Live events",
+    "metrics": "Latency and usage"
+  },
+  "errors": {
+    "token_invalid": "The session token is invalid or expired.",
+    "session_not_found": "No session exists with the given ID.",
+    "session_busy": "The session is already in use by another connection.",
+    "upstream_failed": "An upstream speech or language model service failed."
+  },
+  "backchannel": {
+    "neutral": [
+      "Mm-hm.",
+      "I see.",
+      "Okay.",
+      "Uh-huh.",
+      "I'm listening."
+    ],
+    "interested": [
+      "Oh?",
+      "Really?",
+      "Ooh!",
+      "Wow!",
+      "How interesting!"
+    ],
+    "amused": [
+      "Ha ha.",
+      "Hee hee.",
+      "That's funny.",
+      "How silly!",
+      "Oh, funny!"
+    ],
+    "sympathetic": [
+      "Aww.",
+      "Oh no.",
+      "Oh dear.",
+      "That's hard.",
+      "I'm sorry."
+    ]
+  }
+}
