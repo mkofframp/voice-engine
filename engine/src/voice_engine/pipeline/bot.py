@@ -32,6 +32,7 @@ from pipecat.frames.frames import (
     Frame,
     InputAudioRawFrame,
     InterimTranscriptionFrame,
+    LLMFullResponseStartFrame,
     LLMMessagesAppendFrame,
     LLMTextFrame,
     LLMUpdateSettingsFrame,
@@ -89,6 +90,9 @@ EAGERNESS = {
     "normal": (0.3, 3.0),
     "quick": (0.2, 2.0),
 }
+
+# The safety check gives up after this long (no flag, no event).
+SAFETY_TIMEOUT_S = 5.0
 
 # How long a graceful end waits for the current sentence to finish playing.
 SENTENCE_WAIT_S = 15.0
@@ -447,7 +451,12 @@ class SessionRunner:
         if tap is self._turn_tap:
             await self._on_turn_frame(frame, direction, now)
         elif tap is self._llm_tap:
-            if isinstance(frame, LLMTextFrame) and self._turn is not None:
+            if isinstance(frame, LLMFullResponseStartFrame) and direction == FrameDirection.DOWNSTREAM:
+                # A new reply starts here. The filter and the adapter each read the
+                # config when this start frame reaches them, after every sentence
+                # of the previous reply, so a patch never lands mid-reply.
+                await self._apply_pending_config()
+            elif isinstance(frame, LLMTextFrame) and self._turn is not None:
                 self._turn.mark("llm_first_token", now)
         elif tap is self._sink:
             if isinstance(frame, TTSAudioRawFrame) and self._turn is not None:
@@ -467,13 +476,14 @@ class SessionRunner:
 
     async def _on_turn_frame(self, frame: Frame, direction: FrameDirection, now: float) -> None:
         if isinstance(frame, (InterimTranscriptionFrame, UserStartedSpeakingFrame)):
-            await self._apply_pending_config()
             if self._turn is None:
                 self._turn = TurnMetrics()
         if isinstance(frame, InterimTranscriptionFrame):
             await self._emit("user_transcript", text=frame.text, final=False)
         elif isinstance(frame, TranscriptionFrame):
-            await self._apply_pending_config()
+            # The reply to this turn is generated after this point, so a pending
+            # prompt change must reach the LLM now; the rest waits for the reply.
+            await self._sync_prompt()
             if self._turn is None:
                 self._turn = TurnMetrics()
             self._turn.mark("final_transcript", now)
@@ -489,7 +499,17 @@ class SessionRunner:
             self._last_vad_stop = None
             await self._set_state("thinking")
 
+    async def _sync_prompt(self) -> None:
+        """Send the LLM the system prompt of the config the next reply will use."""
+        prompt = system_prompt(self.session.pending_config or self._cfg)
+        if prompt != self._prompt:
+            self._prompt = prompt
+            await self._turn_tap.push_frame(
+                LLMUpdateSettingsFrame(delta=LLMSettings(system_instruction=prompt))
+            )
+
     async def _apply_pending_config(self) -> None:
+        """Called at the start of each reply: a patch never lands mid-reply."""
         new = self.session.pending_config
         if new is None:
             return
@@ -497,14 +517,9 @@ class SessionRunner:
         self.session.config = new
         self.session.pending_config = None
         self._cfg = new
-        prompt = system_prompt(new)
-        if prompt != self._prompt:
-            self._prompt = prompt
-            await self._turn_tap.push_frame(
-                LLMUpdateSettingsFrame(delta=LLMSettings(system_instruction=prompt))
-            )
         if new.voice_id != old.voice_id:
-            await self._turn_tap.push_frame(
+            # Pushed ahead of the reply's start frame, after the previous reply.
+            await self._llm_tap.push_frame(
                 TTSUpdateSettingsFrame(delta=CartesiaTTSSettings(voice=new.voice_id))
             )
         # turn_eagerness is fixed when the pipeline is built; it takes effect next session.
@@ -515,8 +530,13 @@ class SessionRunner:
         await self._emit("bot_sentence", emotion=emotion, text=text)
 
     async def _classify(self, text: str) -> None:
+        if not text.strip():
+            return
         try:
-            flag = await self._classifier.classify(text)
+            flag = await asyncio.wait_for(self._classifier.classify(text), SAFETY_TIMEOUT_S)
+        except TimeoutError:
+            log.warning("safety classifier timed out after %ss", SAFETY_TIMEOUT_S)
+            return
         except Exception:
             log.exception("safety classifier failed")
             return

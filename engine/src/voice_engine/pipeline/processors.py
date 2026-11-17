@@ -58,20 +58,26 @@ class TagParserProcessor(FrameProcessor):
 
 
 class OutputFilterProcessor(FrameProcessor):
-    """Replaces a blocklisted sentence with the redirect line (once per reply)."""
+    """Replaces a blocklisted sentence with the redirect line (once per reply).
+
+    The config is read once per reply, when the reply's start frame gets here, so a
+    patch that lands mid-reply only affects the next reply."""
 
     def __init__(self, config_ref: ConfigRef, **kwargs) -> None:
         super().__init__(**kwargs)
         self._config_ref = config_ref
+        self._reply_cfg: SessionConfig | None = None
         self._redirected = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if isinstance(frame, (LLMFullResponseStartFrame, InterruptionFrame)):
             self._redirected = False
+            if isinstance(frame, LLMFullResponseStartFrame):
+                self._reply_cfg = self._config_ref()
             await self.push_frame(frame, direction)
         elif isinstance(frame, EmotionSentenceFrame):
-            cfg = self._config_ref()
+            cfg = self._reply_cfg or self._config_ref()
             redirect = cfg.redirect_line or copy.get("redirect_line")
             text, blocked = filter_sentence(frame.text, cfg.output_blocklist, redirect)
             if not blocked:
@@ -104,6 +110,7 @@ class EmotionTTSAdapter(FrameProcessor):
     ) -> None:
         super().__init__(**kwargs)
         self._config_ref = config_ref
+        self._reply_cfg: SessionConfig | None = None  # read once per reply, as in the filter
         self._on_sentence_started = on_sentence_started
         self._pending: dict[int, tuple[str, str]] = {}
         self._closed = False
@@ -125,7 +132,7 @@ class EmotionTTSAdapter(FrameProcessor):
         if isinstance(frame, EmotionSentenceFrame):
             if self._closed:
                 return
-            cfg = self._config_ref()
+            cfg = self._reply_cfg or self._config_ref()
             c = map_emotion(frame.emotion, cfg.emotion_intensity, cfg.speaking_speed)
             delta = CartesiaTTSSettings(
                 generation_config=GenerationConfig(
@@ -140,6 +147,8 @@ class EmotionTTSAdapter(FrameProcessor):
         else:
             if isinstance(frame, InterruptionFrame):
                 self._pending.clear()
+            elif isinstance(frame, LLMFullResponseStartFrame):
+                self._reply_cfg = self._config_ref()
             await self.push_frame(frame, direction)
 
 

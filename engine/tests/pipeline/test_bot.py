@@ -209,9 +209,12 @@ class FakeClassifier:
     def __init__(self, flag: SafetyFlag | None = None) -> None:
         self.flag = flag
         self.seen: list[str] = []
+        self.hang = False
 
     async def classify(self, text: str) -> SafetyFlag | None:
         self.seen.append(text)
+        if self.hang:
+            await asyncio.sleep(3600)
         return self.flag
 
 
@@ -301,6 +304,7 @@ async def test_patch_applies_next_turn():
     h = Harness(responses=[], config={"emotion_intensity": 20})
 
     async def patch_mid_reply():
+        await asyncio.sleep(0.05)  # let the reply's start frame get under way first
         h.store.patch(h.session.id, {"emotion_intensity": 100})
 
     h.llm._responses = [
@@ -418,6 +422,69 @@ async def test_safety_flag_event():
         "category": "personal_info",
         "excerpt": "my address is",
     }
+
+
+async def test_blank_transcript_is_not_classified():
+    flag = SafetyFlag(category="harm", excerpt="x")
+    h = Harness(responses=[], flag=flag)
+    await h.start()
+    await h.say("   ")
+    await h.wait_for(lambda: "user_transcript" in event_types(h))
+    await asyncio.sleep(0.1)
+    await h.stop()
+
+    assert h.classifier.seen == []
+    assert "safety_flag" not in event_types(h)
+    assert "safety_flag" not in h.webhook.types()
+
+
+async def test_hung_classifier_is_cut_off(monkeypatch):
+    from voice_engine.pipeline import bot
+
+    monkeypatch.setattr(bot, "SAFETY_TIMEOUT_S", 0.05)
+    flag = SafetyFlag(category="harm", excerpt="x")
+    h = Harness(responses=[], flag=flag)
+    h.classifier.hang = True
+    await h.start()
+    await h.say("hello")
+    await h.wait_for(lambda: h.classifier.seen == ["hello"])
+    await asyncio.sleep(0.2)
+    assert not any(not t.done() for t in h.runner._work)  # the check gave up
+    await h.stop()
+
+    assert "safety_flag" not in event_types(h)
+    assert "safety_flag" not in h.webhook.types()
+
+
+async def test_patch_waits_for_reply_to_finish_when_child_talks_over_bot():
+    h = Harness(responses=[], config={"emotion_intensity": 20})
+
+    async def child_talks_with_patch_pending():
+        await asyncio.sleep(0.05)  # let the reply's start frame get under way first
+        h.store.patch(h.session.id, {"emotion_intensity": 100})
+        await h.say("wait, wait")
+        await h.wait_for(lambda: "wait, wait" in [
+            e.get("text") for e in h.out.events if e["type"] == "user_transcript"
+        ])
+        await asyncio.sleep(0.05)  # the transcript has gone past the turn tap
+
+    h.llm._responses = [
+        ["[happy] One. ", child_talks_with_patch_pending, "[happy] Two."],
+        ["[happy] Three."],
+    ]
+    await h.start()
+    await h.say("hello")
+    await h.wait_for(lambda: len(h.tts.spoken) >= 3)
+    await h.stop()
+
+    old = map_emotion("happy", 20, 1.0)
+    new = map_emotion("happy", 100, 1.0)
+    (t1, c1), (t2, c2), (t3, c3) = h.tts.spoken
+    assert t2.endswith("Two.") and t3.endswith("Three.")
+    assert (c1.speed, c1.volume) == (old.speed, old.volume)
+    assert (c2.speed, c2.volume) == (old.speed, old.volume)  # rest of the reply unchanged
+    assert (c3.speed, c3.volume) == (new.speed, new.volume)  # next reply picks it up
+    assert h.session.config.emotion_intensity == 100
 
 
 async def test_commands_say_and_add_context():
