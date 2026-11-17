@@ -2,14 +2,37 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
+# Backchannel words as people write them; a transcript is compared after
+# `_canon`, so the many spellings STT produces ("mm-hmm", "mmhmm", "Mhm.", "uh huh")
+# all match.
 BACKCHANNEL_WORDS: frozenset[str] = frozenset(
-    {"mm", "mhm", "mm-hm", "uh-huh", "yeah", "yep", "ok", "okay", "right",
-     "sure", "wow", "oh", "aha", "ha", "haha"}
+    {"mm", "mhm", "mm-hm", "mm-hmm", "hmm", "uh-huh", "yeah", "yep", "yup", "ok", "okay",
+     "right", "sure", "wow", "oh", "ooh", "ah", "aha", "ha", "haha"}
 )
 
 _MAX_BACKCHANNEL_TOKENS = 3
+_LAUGH = re.compile(r"^(?:ha|he){2,}h?$")  # "haha", "hehehe"; not "he"
+
+
+def _canon(word: str) -> str:
+    """One spelling per backchannel: lower case, no hyphens or spaces, runs of a
+    letter other than h collapsed ("mmhmm" -> "mhm", "hmmm" -> "hm", "ooh" -> "oh"),
+    trailing h's collapsed. A doubled h inside a word is kept, so "uh-huh" ("uhhuh")
+    and "uh-uh" ("uhuh", a no) stay apart."""
+    w = re.sub(r"[\s\-–—]+", "", word.lower())
+    w = re.sub(r"([a-gi-z])\1+", r"\1", w)
+    return re.sub(r"h+$", "h", w)
+
+
+_CANON_WORDS: frozenset[str] = frozenset(_canon(w) for w in BACKCHANNEL_WORDS)
+
+
+def is_backchannel_word(word: str) -> bool:
+    c = _canon(word)
+    return c in _CANON_WORDS or bool(_LAUGH.match(c))
 
 
 def _tokens(transcript: str) -> list[str]:
@@ -18,6 +41,22 @@ def _tokens(transcript: str) -> list[str]:
         tok = raw.strip(".,!?;:\"'()[]…-–—")
         if tok:
             out.append(tok)
+    return out
+
+
+def backchannel_units(transcript: str) -> list[str]:
+    """The transcript's words, with a pair that spells one backchannel when written
+    together ("uh huh", "mm hmm") joined into one."""
+    tokens = _tokens(transcript)
+    out: list[str] = []
+    i = 0
+    while i < len(tokens):
+        if i + 1 < len(tokens) and _canon(tokens[i] + tokens[i + 1]) in _CANON_WORDS:
+            out.append(tokens[i] + tokens[i + 1])
+            i += 2
+        else:
+            out.append(tokens[i])
+            i += 1
     return out
 
 
@@ -30,9 +69,9 @@ def classify_user_speech(
 ) -> Literal["undecided", "backchannel", "interruption"]:
     if speech_ms < min_speech_ms:
         return "undecided"
-    tokens = _tokens(transcript)
+    tokens = backchannel_units(transcript)
     if not tokens:
         return "interruption" if speech_ms >= no_text_ms else "undecided"
-    if len(tokens) <= _MAX_BACKCHANNEL_TOKENS and all(t in BACKCHANNEL_WORDS for t in tokens):
+    if len(tokens) <= _MAX_BACKCHANNEL_TOKENS and all(is_backchannel_word(t) for t in tokens):
         return "backchannel"
     return "interruption"

@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from voice_engine import copy
-from voice_engine.interruption import BACKCHANNEL_WORDS
+from voice_engine.interruption import BACKCHANNEL_WORDS, backchannel_units, is_backchannel_word
 
 _TRIM = " \t\r\n.,!?;:\"'()[]…-–—"
 _TAG = re.compile(r"^\s*\[[a-z_]+\]\s*")  # a leading emotion tag such as "[happy]"
@@ -27,8 +27,12 @@ _BACKCHANNEL_LIKE: frozenset[str] = frozenset(
 
 
 def is_backchannel_like(text: str) -> bool:
-    """True if the whole text, normalised, is a backchannel phrase or word."""
-    return _norm(text) in _BACKCHANNEL_LIKE
+    """True if the whole text, normalised, is a backchannel phrase or word (in any of
+    the spellings `interruption` accepts, e.g. "Mm-hmm.", "mmhmm", "Uh huh.")."""
+    if _norm(text) in _BACKCHANNEL_LIKE:
+        return True
+    units = backchannel_units(_TAG.sub("", text))
+    return len(units) == 1 and is_backchannel_word(units[0])
 
 
 def _text(content: Any) -> str:
