@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>voice-engine /dev</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 1rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  h2 { font-size: 1rem; margin: 0 0 .25rem; }
+  textarea { width: 100%; height: 22rem; font-family: ui-monospace, monospace; font-size: 12px; }
+  #log { height: 22rem; overflow: auto; border: 1px solid #aaa; padding: .25rem; font: 12px ui-monospace, monospace; white-space: pre-wrap; }
+  #metrics { font: 12px ui-monospace, monospace; white-space: pre; border: 1px solid #aaa; padding: .25rem; min-height: 8rem; }
+  #status { font: 12px ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<section>
+  <h2 id="h-config"></h2>
+  <textarea id="config" spellcheck="false"></textarea>
+  <p><button id="connect"></button> <button id="disconnect" disabled></button> <span id="status"></span></p>
+</section>
+<section>
+  <h2 id="h-log"></h2>
+  <div id="log"></div>
+  <h2 id="h-metrics"></h2>
+  <div id="metrics"></div>
+</section>
+<script type="module" src="/dev/devpage.js"></script>
+</body>
+</html>

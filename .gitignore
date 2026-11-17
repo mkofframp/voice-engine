@@ -3,4 +3,5 @@
 .venv/
 node_modules/
 dist/
+dist-browser/
 __pycache__/

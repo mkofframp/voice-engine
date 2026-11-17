@@ -1,9 +1,10 @@
 import secrets
+from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, ValidationError, model_validator
 
 from voice_engine import copy
@@ -16,6 +17,15 @@ from voice_engine.sessions import (
     TokenInvalid,
 )
 from voice_engine.settings import Settings
+
+import logging
+
+_log = logging.getLogger(__name__)
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+DEVPAGE_DIR = _REPO_ROOT / "devpage"
+BROWSER_BUNDLE = _REPO_ROOT / "client" / "dist-browser" / "client.js"
+_LOOPBACK = {"127.0.0.1", "::1"}
 
 
 class _PathScopedCORS:
@@ -103,8 +113,7 @@ def create_app(settings: Settings, store: SessionStore, runner_factory: RunnerFa
     def validation_details(e: ValidationError):
         return e.errors(include_url=False, include_context=False, include_input=False)
 
-    @app.post("/sessions", status_code=201, dependencies=auth)
-    async def create_session(body: dict):
+    def create_session_internal(body: dict) -> dict:
         try:
             config = SessionConfig.model_validate(body)
         except ValidationError as e:
@@ -115,6 +124,46 @@ def create_app(settings: Settings, store: SessionStore, runner_factory: RunnerFa
             "client_token": token,
             "expires_in": settings.client_token_ttl_s,
         }
+
+    @app.post("/sessions", status_code=201, dependencies=auth)
+    async def create_session(body: dict):
+        return create_session_internal(body)
+
+    # Local developer test page. Loopback peers only; X-Forwarded-For is never consulted.
+    def require_loopback(request: Request) -> None:
+        if request.client is None or request.client.host not in _LOOPBACK:
+            raise HTTPException(status_code=404)
+
+    dev = [Depends(require_loopback)]
+
+    @app.get("/dev", dependencies=dev)
+    async def dev_page():
+        return FileResponse(DEVPAGE_DIR / "index.html", media_type="text/html")
+
+    @app.get("/dev/devpage.js", dependencies=dev)
+    async def dev_script():
+        return FileResponse(DEVPAGE_DIR / "devpage.js", media_type="text/javascript")
+
+    @app.get("/dev/copy.json", dependencies=dev)
+    async def dev_copy():
+        keys = ("connect", "disconnect", "config_editor", "event_log", "metrics")
+        return {k: copy.get("devpage." + k) for k in keys}
+
+    @app.get("/dev/config.json", dependencies=dev)
+    async def dev_config():
+        return SessionConfig().model_dump(mode="json")
+
+    @app.get("/dev/client.js", dependencies=dev)
+    async def dev_client():
+        if not BROWSER_BUNDLE.is_file():
+            _log.warning("dev client bundle missing; run `npm run build:browser` in client/")
+            raise HTTPException(status_code=404)
+        return FileResponse(BROWSER_BUNDLE, media_type="text/javascript")
+
+    @app.post("/dev/api/session", status_code=201, dependencies=dev)
+    async def dev_create_session(body: dict):
+        out = create_session_internal(body)
+        return {"session_id": out["session_id"], "client_token": out["client_token"]}
 
     @app.get("/sessions/{id}", dependencies=auth)
     async def read_session(id: str):
