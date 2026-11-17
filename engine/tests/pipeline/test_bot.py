@@ -29,6 +29,8 @@ from pipecat.frames.frames import (
     TTSStartedFrame,
     TTSStoppedFrame,
     TTSUpdateSettingsFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
@@ -328,6 +330,25 @@ async def test_patch_applies_next_turn():
     assert (c3.speed, c3.volume) == (new.speed, new.volume)
     assert h.session.config.emotion_intensity == 100
     assert h.session.pending_config is None
+
+
+async def test_turn_without_words_goes_back_to_listening():
+    """A user turn that ends with no transcript gets no reply, so the state must
+    not stick at "thinking" (e.g. an "uh-huh" whose bot finished meanwhile)."""
+    h = Harness(responses=[["[happy] Hi there!"]])
+    await h.start()
+    # The turn frames as the aggregator emits them, with no transcript between.
+    await h.runner.queue_frame(UserStartedSpeakingFrame())
+    await h.runner.queue_frame(UserStoppedSpeakingFrame())
+    await asyncio.sleep(0.2)
+    assert [e["state"] for e in h.out.events if e["type"] == "state"] == ["listening"]
+    await h.say("hello")  # the next turn with words is answered as usual
+    await h.wait_for(lambda: "bot_sentence" in event_types(h))
+    await h.stop()
+
+    states = [e["state"] for e in h.out.events if e["type"] == "state"]
+    assert states[:3] == ["listening", "thinking", "speaking"]
+    assert len(h.llm.contexts) == 1
 
 
 async def test_bot_sentence_and_state_events():

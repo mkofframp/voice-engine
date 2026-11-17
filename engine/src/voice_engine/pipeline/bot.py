@@ -3,7 +3,7 @@
     transport.input()
       -> MicGate                      (mute_mic / unmute_mic drop input audio)
       -> STT (Deepgram, interim results)
-      -> TurnManager                  (barge-in, drops "uh-huh" transcripts, backchannel clips)
+      -> TurnManager                  (barge-in, "uh-huh" -> UserBackchannelFrame, backchannel clips)
       -> TurnTap                      (transcripts, config, metrics)
       -> user context aggregator      (Silero VAD + Smart Turn v3 decide end of turn)
       -> TurnManager verdict tap      (Smart Turn's complete/incomplete verdict)
@@ -17,9 +17,10 @@
       -> TurnManager playback tap     (the words the child has heard)
       -> assistant context aggregator
 
-Only the TurnManager interrupts the bot: Pipecat's user-turn start strategies
-start the user's turn on VAD or a transcript but never broadcast an
-interruption (`user_turn_start_strategies`). See pipeline/turn_manager.py.
+Only the TurnManager interrupts a speaking bot: Pipecat's user-turn start
+strategies start the user's turn on VAD or a transcript and interrupt only when
+the bot is not speaking (a reply still being generated). See
+pipeline/turn_strategies.py and pipeline/turn_manager.py.
 """
 
 import asyncio
@@ -75,6 +76,10 @@ from voice_engine.pipeline.processors import (
     TagParserProcessor,
 )
 from voice_engine.pipeline.turn_manager import TurnManager
+from voice_engine.pipeline.turn_strategies import (
+    SmartTurnStopWithBackchannels,
+    user_turn_start_strategies,
+)
 from voice_engine.sessions import Session, SessionStore
 
 log = logging.getLogger(__name__)
@@ -103,23 +108,6 @@ SAFETY_TIMEOUT_S = 5.0
 
 # How long a graceful end waits for the current sentence to finish playing.
 SENTENCE_WAIT_S = 15.0
-
-
-def user_turn_start_strategies() -> list:
-    """Pipecat's default start strategies (VAD, then transcripts), without their
-    interruption: by default either one cuts the bot off as soon as it fires.
-    Whether speech over the bot is an interruption is the TurnManager's call."""
-    from pipecat.turns.user_start.transcription_user_turn_start_strategy import (
-        TranscriptionUserTurnStartStrategy,
-    )
-    from pipecat.turns.user_start.vad_user_turn_start_strategy import (
-        VADUserTurnStartStrategy,
-    )
-
-    return [
-        VADUserTurnStartStrategy(enable_interruptions=False),
-        TranscriptionUserTurnStartStrategy(enable_interruptions=False),
-    ]
 
 
 def system_prompt(cfg: SessionConfig) -> str:
@@ -156,9 +144,6 @@ def real_services(settings) -> ServicesFactory:
         from pipecat.services.cartesia.tts import CartesiaTTSService
         from pipecat.services.deepgram.stt import DeepgramSTTService
         from pipecat.transcriptions.language import Language
-        from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
-            TurnAnalyzerUserTurnStopStrategy,
-        )
         from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
         from voice_engine.safety import SafetyClassifier
@@ -190,7 +175,7 @@ def real_services(settings) -> ServicesFactory:
         strategies = UserTurnStrategies(
             start=user_turn_start_strategies(),
             stop=[
-                TurnAnalyzerUserTurnStopStrategy(
+                SmartTurnStopWithBackchannels(
                     turn_analyzer=LocalSmartTurnAnalyzerV3(
                         params=SmartTurnParams(stop_secs=turn_stop)
                     )
@@ -280,6 +265,7 @@ class SessionRunner:
         self._end_reason: str | None = None
         self._metrics = SessionMetrics()
         self._turn: TurnMetrics | None = None
+        self._turn_heard = False  # a final transcript reached the aggregator this turn
         self._last_vad_stop: float | None = None
         self._vad_stop_secs = 0.0
 
@@ -537,13 +523,22 @@ class SessionRunner:
             if self._turn is None:
                 self._turn = TurnMetrics()
             self._turn.mark("final_transcript", now)
+            self._turn_heard = True
             await self._emit("user_transcript", text=frame.text, final=True)
             self._spawn(self._classify(frame.text), work=True)
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
             self._last_vad_stop = now - self._vad_stop_secs
         elif isinstance(frame, UserStoppedSpeakingFrame):
+            heard, self._turn_heard = self._turn_heard, False
             if self._bot_speaking:
                 return  # a backchannel turn ended; the bot is still talking
+            if not heard:
+                # No words, so no reply is coming (a lone "uh-huh" whose bot
+                # finished meanwhile, or speech the STT never transcribed).
+                self._turn = None
+                self._last_vad_stop = None
+                await self._set_state("listening")
+                return
             if self._turn is not None:
                 last_word = self._last_vad_stop if self._last_vad_stop is not None else now
                 self._turn.mark("user_last_word", last_word)

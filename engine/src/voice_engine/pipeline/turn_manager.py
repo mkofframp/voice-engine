@@ -16,8 +16,10 @@ only visible further down, so it hands out two pass-through taps:
 While the bot speaks, every update of the user's speech (VAD, interim or final
 transcript) is classified with `classify_user_speech`. Only an "interruption"
 verdict interrupts the bot; Pipecat's own turn start strategies are configured
-never to (see `bot.user_turn_start_strategies`). A "backchannel" ("uh-huh")
-leaves the bot talking and its final transcript is dropped here.
+not to while it speaks (see `turn_strategies`). A "backchannel" ("uh-huh")
+leaves the bot talking: its final transcript is swapped here for a
+`UserBackchannelFrame`, which the aggregator keeps out of the context and the
+stop strategy takes as the end of the turn.
 
 While the child holds the turn, a pause that the end-of-turn model calls
 incomplete may get a short pre-rendered backchannel clip. Clips go out as plain
@@ -46,6 +48,7 @@ from pipecat.frames.frames import (
     OutputAudioRawFrame,
     TranscriptionFrame,
     TTSTextFrame,
+    UserBackchannelFrame,
     UserSpeakingFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
@@ -148,6 +151,7 @@ class TurnManager(FrameProcessor):
             self._cancel_clip()
         elif isinstance(frame, VADUserStartedSpeakingFrame):
             self._speech_start = now - frame.start_secs
+            self._heard = ""  # a late final from earlier speech is not this speech
             self._cancel_clip()
             await self._check_barge_in(now)
         elif isinstance(frame, UserSpeakingFrame):
@@ -175,8 +179,9 @@ class TurnManager(FrameProcessor):
                 speech_ms = max(self._speech_ms(now), FINAL_MIN_SPEECH_MS)
                 kind = classify_user_speech(frame.text, speech_ms)
                 if kind == "backchannel":
-                    return  # the bot keeps talking and no user turn is formed
-                if kind == "interruption":
+                    # The bot keeps talking and nothing reaches the context.
+                    frame = UserBackchannelFrame(frame.text, frame.user_id, frame.timestamp)
+                elif kind == "interruption":
                     await self._interrupt(now)
         elif isinstance(frame, (EndFrame, CancelFrame)):
             self._cancel_clip()
@@ -205,7 +210,12 @@ class TurnManager(FrameProcessor):
         played_ms = int((now - self._reply_start) * 1000) if self._reply_start is not None else 0
         cut = truncate_reply(self._sentences, played_ms)
         spoken = cut[: -len(CUT_MARKER)] if cut.endswith(CUT_MARKER) else ""
-        self._pending_cut = _Cut(cut, self._reply_from, len(self._context.get_messages()))
+        pending = _Cut(cut, self._reply_from, len(self._context.get_messages()))
+        if self._reply_done:
+            # The aggregator already wrote the reply and won't report it again.
+            self._apply_cut(pending)
+        else:
+            self._pending_cut = pending
         self._close_reply()
         await self.broadcast_interruption()
         await self._emit("interrupted", spoken_text=spoken)
@@ -220,6 +230,9 @@ class TurnManager(FrameProcessor):
         if cut is None:
             self._reply_done = True
             return
+        self._apply_cut(cut)
+
+    def _apply_cut(self, cut: _Cut) -> None:
         messages = list(self._context.get_messages())
         mine = [
             i
@@ -238,6 +251,7 @@ class TurnManager(FrameProcessor):
             return  # more of the same reply (speech can pause between sentences)
         self._reply_start = now
         self._reply_done = False
+        self._pending_cut = None  # a cut never written belongs to the old reply
         self._reply_from = len(self._context.get_messages())
         self._sentences = []
         self._segment = None
