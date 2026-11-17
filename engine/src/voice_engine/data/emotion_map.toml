@@ -1,0 +1,67 @@
+# Cartesia model: sonic-3.6 (fastest, most natural; docs snapshot sonic-3.6-2026-08-27, read 2026-11-17).
+# Controls (generation_config): emotion (string, English, beta; primary: neutral, calm, angry,
+# content, sad, scared; extended: happy, excited, curious, ...), speed 0.6-1.5, volume 0.5-2.0.
+# Laughter: put "[laughter]" in the transcript. No dedicated surprise/whisper/proud emotion:
+# those map to the nearest supported delivery.
+# Per tag, FULL-intensity controls: speed_factor multiplies base speed, volume is absolute,
+# prefix is prepended to the text at intensity >= 50.
+
+[neutral]
+emotion = "neutral"
+speed_factor = 1.0
+volume = 1.0
+prefix = ""
+
+[happy]
+emotion = "happy"
+speed_factor = 1.05
+volume = 1.1
+prefix = ""
+
+[excited]
+emotion = "excited"
+speed_factor = 1.15
+volume = 1.25
+prefix = ""
+
+[giggle]
+emotion = "happy"
+speed_factor = 1.1
+volume = 1.1
+prefix = "[laughter]"
+
+[curious]
+emotion = "curious"
+speed_factor = 1.0
+volume = 1.0
+prefix = ""
+
+[surprised]
+emotion = "excited"
+speed_factor = 1.1
+volume = 1.2
+prefix = ""
+
+[gentle]
+emotion = "calm"
+speed_factor = 0.9
+volume = 0.9
+prefix = ""
+
+[sad]
+emotion = "sad"
+speed_factor = 0.85
+volume = 0.85
+prefix = ""
+
+[whisper]
+emotion = "calm"
+speed_factor = 0.85
+volume = 0.5
+prefix = ""
+
+[proud]
+emotion = "content"
+speed_factor = 0.95
+volume = 1.1
+prefix = ""
