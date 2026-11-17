@@ -66,7 +66,7 @@ def test_create_requires_key(env):
     assert client.post("/sessions", json={}).status_code == 401
     r = client.post("/sessions", json={}, headers={"Authorization": "Bearer nope"})
     assert r.status_code == 401
-    assert r.json()["error"] == "token_invalid"
+    assert r.json()["error"] == "unauthorized"
 
 
 def test_create_returns_token(env):
@@ -142,7 +142,8 @@ def test_command_not_connected_409_and_bad_422(env):
     client, *_ = env
     sid = make(client)["session_id"]
     url = f"/sessions/{sid}/commands"
-    assert client.post(url, json={"type": "mute_mic"}, headers=AUTH).status_code == 409
+    r = client.post(url, json={"type": "mute_mic"}, headers=AUTH)
+    assert r.status_code == 409 and r.json()["error"] == "session_not_connected"
     assert client.post(url, json={"type": "bogus"}, headers=AUTH).status_code == 422
 
 
@@ -160,4 +161,28 @@ def test_delete_stops_runner(env):
 def test_cors_only_offer(env):
     client, *_ = env
     h = {"Origin": "http://localhost:5173", "Access-Control-Request-Method": "POST"}
-    assert client.options("/webrtc/offer", headers=h).headers.get("access-control-allow-origin")
+    r = client.options("/webrtc/offer", headers=h)
+    assert r.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    assert "content-type" in r.headers.get("access-control-allow-headers", "").lower()
+    assert "access-control-allow-origin" not in client.options("/sessions", headers=h).headers
+    r = client.post("/sessions", json={}, headers={**AUTH, "Origin": "http://localhost:5173"})
+    assert r.status_code == 201
+    assert "access-control-allow-origin" not in r.headers
+    r = connect(client, "bad")
+    assert "access-control-allow-origin" not in r.headers  # no Origin sent
+    r = client.post("/webrtc/offer", json={"client_token": "bad", "sdp": "x", "type": "offer"},
+                    headers={"Origin": "http://localhost:5173"})
+    assert r.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+def test_all_emitted_error_codes_have_copy():
+    import re
+    from pathlib import Path
+
+    from voice_engine import api, copy
+
+    src = Path(api.__file__).read_text()
+    codes = set(re.findall(r'ApiError\(\d+, "(\w+)"', src))
+    assert {"unauthorized", "invalid_request", "session_not_connected"} <= codes
+    for code in codes:
+        assert copy.get("errors." + code).strip()

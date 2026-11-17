@@ -18,16 +18,28 @@ from voice_engine.sessions import (
 from voice_engine.settings import Settings
 
 
+class _PathScopedCORS:
+    """Applies CORSMiddleware to one exact path; every other path passes through untouched."""
+
+    def __init__(self, app, path: str, **cors_kwargs):
+        self._app = app
+        self._path = path
+        self._cors = CORSMiddleware(app, **cors_kwargs)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"] == self._path:
+            await self._cors(scope, receive, send)
+        else:
+            await self._app(scope, receive, send)
+
+
 class ApiError(Exception):
     def __init__(self, status: int, code: str, details=None):
         self.status, self.code, self.details = status, code, details
 
 
 def _message(code: str) -> str:
-    try:
-        return copy.get("errors." + code)
-    except KeyError:
-        return ""  # no copy for this code yet; see report
+    return copy.get("errors." + code)
 
 
 class _Cmd(BaseModel):
@@ -71,10 +83,11 @@ def create_app(settings: Settings, store: SessionStore, runner_factory: RunnerFa
     app = FastAPI()
 
     app.add_middleware(
-        CORSMiddleware,
+        _PathScopedCORS,
+        path="/webrtc/offer",
         allow_origins=settings.allowed_origins,
         allow_methods=["POST", "OPTIONS"],
-        allow_headers=["*"],
+        allow_headers=["content-type"],
     )
 
     @app.exception_handler(ApiError)
@@ -97,7 +110,7 @@ def create_app(settings: Settings, store: SessionStore, runner_factory: RunnerFa
         if authorization is None or not secrets.compare_digest(
             authorization.encode(), expected.encode()
         ):
-            raise ApiError(401, "token_invalid")
+            raise ApiError(401, "unauthorized")
 
     auth = [Depends(require_key)]
 
@@ -157,7 +170,7 @@ def create_app(settings: Settings, store: SessionStore, runner_factory: RunnerFa
         except ValidationError as e:
             raise ApiError(422, "invalid_request", validation_details(e)) from None
         if s.status != "connected" or s.runner is None:
-            raise ApiError(409, "session_busy")
+            raise ApiError(409, "session_not_connected")
         await s.runner.command(cmd.model_dump())
         return {}
 

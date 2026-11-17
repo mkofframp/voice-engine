@@ -12,7 +12,10 @@
     "token_invalid": "The session token is invalid or expired.",
     "session_not_found": "No session exists with the given ID.",
     "session_busy": "The session is already in use by another connection.",
-    "upstream_failed": "An upstream speech or language model service failed."
+    "upstream_failed": "An upstream speech or language model service failed.",
+    "invalid_request": "The request body or configuration failed validation. See details for specific errors.",
+    "unauthorized": "The API key in the Authorization header is missing or invalid.",
+    "session_not_connected": "The session does not yet have a live connection."
   },
   "backchannel": {
     "neutral": [
