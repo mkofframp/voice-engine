@@ -93,3 +93,12 @@ def test_connected_session_never_pruned():
     s.status = "connected"
     clock.t = 10_000
     assert store.get(s.id) is s
+
+
+def test_first_end_reason_stands():
+    """M6: DELETE after a time-limit end does not rewrite the reason."""
+    store = make_store(Clock())
+    s, _ = store.create(SessionConfig())
+    store.end(s.id, "time_limit")
+    store.end(s.id, "deleted")
+    assert store.get(s.id).end_reason == "time_limit"
