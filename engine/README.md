@@ -28,11 +28,15 @@ Secrets are read only from `engine/.env` (never from the request or the browser)
 
 Optional: `HOST` (default `127.0.0.1`), `PORT` (default `7860`), `CLIENT_TOKEN_TTL_S`
 (default `120`), `ALLOWED_ORIGINS` (JSON list, default `["http://localhost:5173"]`),
-`HOST`, `PORT`, `CLIENT_TOKEN_TTL_S` and `ALLOWED_ORIGINS` can go in `.env`. `DEBUG` is read
+`LOG_LEVEL` (`INFO`, `WARNING` or `ERROR`; default `INFO`).
+`HOST`, `PORT`, `CLIENT_TOKEN_TTL_S`, `ALLOWED_ORIGINS` and `LOG_LEVEL` can go in `.env`. `DEBUG` is read
 from the shell environment only, not from `.env`: run `DEBUG=1 uv run voice-engine` to add
 `history_roles` to `GET /sessions/{id}` (for the e2e script only).
 
-Nothing is persisted. Sessions live in memory and transcripts are not logged.
+Nothing is persisted. Sessions live in memory and transcripts are not logged: `voice-engine`
+replaces loguru's default DEBUG sink with one at `LOG_LEVEL` (never below `INFO`, since
+Pipecat's DEBUG lines carry transcripts and replies), sets `PIPECAT_LOG_LLM_CONTEXT=off` and
+drops Pipecat's few text-bearing lines at any level.
 
 ## HTTP API
 

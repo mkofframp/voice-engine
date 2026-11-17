@@ -1,8 +1,12 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENGINE_DIR = Path(__file__).resolve().parents[2]
+
+# Nothing below INFO: Pipecat's DEBUG lines carry transcripts and replies.
+LOG_LEVELS = ("INFO", "WARNING", "ERROR")
 
 
 class Settings(BaseSettings):
@@ -18,3 +22,4 @@ class Settings(BaseSettings):
     port: int = 7860
     client_token_ttl_s: int = 120
     allowed_origins: list[str] = ["http://localhost:5173"]
+    log_level: Literal["INFO", "WARNING", "ERROR"] = "INFO"

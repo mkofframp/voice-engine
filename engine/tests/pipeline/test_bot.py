@@ -629,3 +629,81 @@ async def test_history_roles_counts_without_text():
 
     assert roles["user"] == 1 and roles["assistant"] == 1
     assert all(isinstance(k, str) and isinstance(v, int) for k, v in roles.items())
+
+
+# ---------- C1: no child or bot text in logs ----------
+
+SECRET_CHILD = "my secret is purple elephants"
+SECRET_BOT = "zebra marmalade sandwich"
+
+
+@pytest.fixture
+def restore_loguru():
+    from loguru import logger
+
+    yield
+    logger.remove()
+    logger.add(__import__("sys").stderr)
+
+
+async def test_turn_text_not_in_logs_at_default_level(monkeypatch, caplog, restore_loguru):
+    """With logging as `voice-engine` configures it, a turn's words reach no log line:
+    not from our code, not from Pipecat's pipeline, not from its LLM-context dump."""
+    import logging
+
+    from pipecat.processors.aggregators.llm_context import LLMContext
+    from pipecat.services.anthropic.llm import AnthropicLLMService
+    from pipecat.utils import log_config
+
+    from voice_engine.__main__ import configure_logging
+
+    monkeypatch.delenv("PIPECAT_LOG_LLM_CONTEXT", raising=False)
+    monkeypatch.setattr(log_config, "_llm_context_log_mode", None)  # re-read the env var
+    lines: list[str] = []
+    configure_logging(sink=lambda m: lines.append(str(m)))
+
+    with caplog.at_level(logging.DEBUG, logger="voice_engine"):
+        h = Harness(responses=[[f"[happy] {SECRET_BOT}."]])
+        await h.start()
+        await h.say(SECRET_CHILD)
+        await h.wait_for(lambda: len(h.tts.spoken) >= 1)
+        await h.stop()
+        # The real LLM service's per-inference context line (Pipecat logs the
+        # whole context there unless PIPECAT_LOG_LLM_CONTEXT=off).
+        llm = AnthropicLLMService(api_key="test-key")
+        llm._log_llm_response(
+            LLMContext([{"role": "user", "content": SECRET_CHILD}, {"role": "assistant", "content": SECRET_BOT}])
+        )
+
+    logged = "".join(lines) + caplog.text
+    for secret in (SECRET_CHILD, SECRET_BOT, "purple", "marmalade"):
+        assert secret not in logged
+    assert log_config._get_llm_context_log_mode() == log_config._LLMContextLogMode.OFF
+
+
+async def test_llm_context_line_has_no_text_even_at_debug(monkeypatch, restore_loguru):
+    """Second guard: with the context dump off, even a DEBUG sink gets no message text."""
+    from loguru import logger
+    from pipecat.processors.aggregators.llm_context import LLMContext
+    from pipecat.services.anthropic.llm import AnthropicLLMService
+    from pipecat.utils import log_config
+
+    from voice_engine.__main__ import configure_logging
+
+    monkeypatch.delenv("PIPECAT_LOG_LLM_CONTEXT", raising=False)
+    monkeypatch.setattr(log_config, "_llm_context_log_mode", None)
+    configure_logging(sink=lambda m: None)
+    lines: list[str] = []
+    logger.add(lambda m: lines.append(str(m)), level="DEBUG")
+    llm = AnthropicLLMService(api_key="test-key")
+    llm._log_llm_response(LLMContext([{"role": "user", "content": SECRET_CHILD}]))
+
+    assert any("Generating LLM response" in line for line in lines)
+    assert not any(SECRET_CHILD in line for line in lines)
+
+
+def test_configure_logging_rejects_levels_below_info():
+    from voice_engine.__main__ import configure_logging
+
+    with pytest.raises(ValueError):
+        configure_logging(level="DEBUG", sink=lambda m: None)
