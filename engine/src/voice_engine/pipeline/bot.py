@@ -3,8 +3,10 @@
     transport.input()
       -> MicGate                      (mute_mic / unmute_mic drop input audio)
       -> STT (Deepgram, interim results)
-      -> TurnTap                      ([TurnManager slot]: transcripts, config, metrics)
+      -> TurnManager                  (barge-in, drops "uh-huh" transcripts, backchannel clips)
+      -> TurnTap                      (transcripts, config, metrics)
       -> user context aggregator      (Silero VAD + Smart Turn v3 decide end of turn)
+      -> TurnManager verdict tap      (Smart Turn's complete/incomplete verdict)
       -> LLM (Claude Haiku 5.5)
       -> LLMTap                       (first-token metric)
       -> TagParserProcessor -> OutputFilterProcessor -> EmotionTTSAdapter
@@ -12,9 +14,12 @@
       -> EventSink                    (events to the browser, bot speaking state)
       -> transport.output()
       -> playback tap                 (bot_sentence when a sentence starts playing)
+      -> TurnManager playback tap     (the words the child has heard)
       -> assistant context aggregator
 
-Barge-in and backchannels are Task 11.
+Only the TurnManager interrupts the bot: Pipecat's user-turn start strategies
+start the user's turn on VAD or a transcript but never broadcast an
+interruption (`user_turn_start_strategies`). See pipeline/turn_manager.py.
 """
 
 import asyncio
@@ -58,6 +63,7 @@ from pipecat.services.settings import LLMSettings
 from pipecat.workers.runner import WorkerRunner
 
 from voice_engine import copy
+from voice_engine.backchannel import ClipBank
 from voice_engine.config import SessionConfig
 from voice_engine.emotions import EMOTION_PROMPT
 from voice_engine.metrics import SessionMetrics, TurnMetrics
@@ -68,6 +74,7 @@ from voice_engine.pipeline.processors import (
     OutputFilterProcessor,
     TagParserProcessor,
 )
+from voice_engine.pipeline.turn_manager import TurnManager
 from voice_engine.sessions import Session, SessionStore
 
 log = logging.getLogger(__name__)
@@ -98,6 +105,23 @@ SAFETY_TIMEOUT_S = 5.0
 SENTENCE_WAIT_S = 15.0
 
 
+def user_turn_start_strategies() -> list:
+    """Pipecat's default start strategies (VAD, then transcripts), without their
+    interruption: by default either one cuts the bot off as soon as it fires.
+    Whether speech over the bot is an interruption is the TurnManager's call."""
+    from pipecat.turns.user_start.transcription_user_turn_start_strategy import (
+        TranscriptionUserTurnStartStrategy,
+    )
+    from pipecat.turns.user_start.vad_user_turn_start_strategy import (
+        VADUserTurnStartStrategy,
+    )
+
+    return [
+        VADUserTurnStartStrategy(enable_interruptions=False),
+        TranscriptionUserTurnStartStrategy(enable_interruptions=False),
+    ]
+
+
 def system_prompt(cfg: SessionConfig) -> str:
     parts = [cfg.safety_prompt, cfg.persona_prompt, EMOTION_PROMPT]
     parts.append(RESPONSE_LENGTH_LINES.get(cfg.response_length, RESPONSE_LENGTH_LINES["short"]))
@@ -123,7 +147,9 @@ def real_services(settings) -> ServicesFactory:
     def build(cfg: SessionConfig, prompt: str) -> Services:
         import anthropic
         from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-        from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
+        from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
+            LocalSmartTurnAnalyzerV3,
+        )
         from pipecat.audio.vad.silero import SileroVADAnalyzer
         from pipecat.audio.vad.vad_analyzer import VADParams
         from pipecat.services.anthropic.llm import AnthropicLLMService
@@ -162,6 +188,7 @@ def real_services(settings) -> ServicesFactory:
         )
         classifier = SafetyClassifier(anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key))
         strategies = UserTurnStrategies(
+            start=user_turn_start_strategies(),
             stop=[
                 TurnAnalyzerUserTurnStopStrategy(
                     turn_analyzer=LocalSmartTurnAnalyzerV3(
@@ -294,13 +321,26 @@ class SessionRunner:
         self._sink = EventSink(self)
         config_ref = lambda: self._cfg  # noqa: E731
         self._adapter = EmotionTTSAdapter(config_ref, on_sentence_started=self._on_sentence)
+        self._context = context
+        # Clips are rendered in the background; until then it listens without them.
+        tm = TurnManager(config_ref, ClipBank({}), context, out=self._sink.push_frame)
+        self._turn_manager = tm
+        assistant = pair.assistant()
+
+        @assistant.event_handler("on_assistant_turn_stopped")
+        async def _assistant_turn_stopped(_agg, _message) -> None:
+            # The reply is in the context now; an interrupted one gets cut here.
+            await tm.assistant_turn_stopped()
+
         pipeline = Pipeline(
             [
                 transport.input(),
                 self._mic,
                 svc.stt,
+                tm,
                 self._turn_tap,
                 pair.user(),
+                tm.verdict_tap(),
                 svc.llm,
                 self._llm_tap,
                 TagParserProcessor(),
@@ -310,7 +350,8 @@ class SessionRunner:
                 self._sink,
                 transport.output(),
                 self._adapter.playback_tap(),
-                pair.assistant(),
+                tm.playback_tap(),
+                assistant,
             ]
         )
         worker = PipelineWorker(
@@ -342,6 +383,13 @@ class SessionRunner:
         self._started_at = self._clock()
         self._run_task = asyncio.create_task(self._run(worker))
         self._timer_task = self._spawn(self._timer())
+        self._spawn(self._load_clips(cfg))
+
+    async def _load_clips(self, cfg: SessionConfig) -> None:
+        try:
+            self._turn_manager.clip_bank = await self._cache.backchannel_bank(cfg)
+        except Exception:
+            log.warning("backchannel clips unavailable; listening without them")
 
     async def _run(self, worker: PipelineWorker) -> None:
         try:
@@ -476,7 +524,9 @@ class SessionRunner:
 
     async def _on_turn_frame(self, frame: Frame, direction: FrameDirection, now: float) -> None:
         if isinstance(frame, (InterimTranscriptionFrame, UserStartedSpeakingFrame)):
-            if self._turn is None:
+            # Speech over the bot opens no turn yet: an "uh-huh" never becomes one,
+            # and an interruption stops the bot, so its later frames do.
+            if self._turn is None and not self._bot_speaking:
                 self._turn = TurnMetrics()
         if isinstance(frame, InterimTranscriptionFrame):
             await self._emit("user_transcript", text=frame.text, final=False)
@@ -492,6 +542,8 @@ class SessionRunner:
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
             self._last_vad_stop = now - self._vad_stop_secs
         elif isinstance(frame, UserStoppedSpeakingFrame):
+            if self._bot_speaking:
+                return  # a backchannel turn ended; the bot is still talking
             if self._turn is not None:
                 last_word = self._last_vad_stop if self._last_vad_stop is not None else now
                 self._turn.mark("user_last_word", last_word)
