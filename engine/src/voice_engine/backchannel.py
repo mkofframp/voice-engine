@@ -53,11 +53,20 @@ def _words(words: tuple[str, ...]) -> re.Pattern[str]:
     return re.compile(r"\b(?:" + "|".join(words) + r")\b", re.IGNORECASE)
 
 
+# Word forms, not stems: "hurtful" is not a hurt, but "hurts" and "hurting" are.
 _SYMPATHETIC = _words(
-    ("hurt", "sad", "cry", "cried", "crying", "scared", "sick", "lost", "broke", "broken")
+    (
+        r"hurt(?:s|ing)?", r"sad(?:der|dest)?", r"cr(?:y|ies|ied|ying)",
+        r"scar(?:ed|y|es|ier|iest)", r"afraid", r"sick", r"lost", r"broke(?:n)?",
+    )
 )
-_AMUSED = _words(("funny", "silly", "laugh", "laughed", "haha", "joke", "giggle", "giggled"))
-_INTERESTED = _words(("guess what", "you know what"))
+_AMUSED = _words(
+    (
+        r"funn(?:y|ier|iest)", r"sill(?:y|ier|iest)", r"laugh(?:s|ed|ing)?", r"(?:ha){2,}h?",
+        r"jok(?:e|es|ed|ing)", r"giggl(?:e|es|ed|ing)",
+    )
+)
+_INTERESTED = _words((r"guess\s+what", r"you\s+know\s+what"))
 
 
 def pick_mood(interim_text: str) -> Mood:

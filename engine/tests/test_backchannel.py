@@ -89,3 +89,28 @@ def test_empty_mood_falls_back():
     bank = ClipBank({"neutral": [b"n"], "amused": []}, rng=random.Random(0))
     assert bank.pick("amused") == (0, b"n")
     assert ClipBank({}).pick("amused") is None
+
+
+@pytest.mark.parametrize(
+    "text, mood",
+    [
+        ("my tummy hurts", "sympathetic"),
+        ("it's hurting", "sympathetic"),
+        ("the movie was scary", "sympathetic"),
+        ("I was afraid of the dark", "sympathetic"),
+        ("my sister cries a lot", "sympathetic"),
+        ("it scares me", "sympathetic"),
+        ("we were laughing so much", "amused"),
+        ("he laughs at everything", "amused"),
+        ("she was joking", "amused"),
+        ("it was the funniest", "amused"),
+        ("hahaha", "amused"),
+        ("I guess what happened was", "interested"),
+        ("guess   what", "interested"),
+        ("you know\nwhat", "interested"),
+        ("hurtful", "neutral"),
+        ("my grandma lives far away", "neutral"),
+    ],
+)
+def test_pick_mood_inflections(text, mood):
+    assert pick_mood(text) == mood
