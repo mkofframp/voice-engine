@@ -78,6 +78,7 @@ from voice_engine.pipeline.processors import (
 from voice_engine.pipeline.turn_manager import TurnManager
 from voice_engine.pipeline.turn_strategies import (
     SmartTurnStopWithBackchannels,
+    bind_reply_state,
     user_turn_start_strategies,
 )
 from voice_engine.sessions import Session, SessionStore
@@ -311,6 +312,8 @@ class SessionRunner:
         # Clips are rendered in the background; until then it listens without them.
         tm = TurnManager(config_ref, ClipBank({}), context, out=self._sink.push_frame)
         self._turn_manager = tm
+        # Pipecat interrupts on its own only when no reply is open (thinking phase).
+        bind_reply_state(svc.user_turn_strategies, lambda: tm.reply_open)
         assistant = pair.assistant()
 
         @assistant.event_handler("on_assistant_turn_stopped")

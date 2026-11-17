@@ -51,6 +51,7 @@ from voice_engine.history import CUT_MARKER
 from voice_engine.pipeline.turn_manager import TurnManager
 from voice_engine.pipeline.turn_strategies import (
     SmartTurnStopWithBackchannels,
+    bind_reply_state,
     user_turn_start_strategies,
 )
 
@@ -477,6 +478,106 @@ async def test_uh_huh_ends_turn_in_real_aggregator():
     assert backchannels == ["uh-huh"]
     assert context.get_messages() == before
     assert not h.tm._user_turn
+
+
+# ---------- a pause between sentences (the bot is silent, the reply goes on) ----------
+
+
+def _bound_start_strategies(h: "TM") -> list[UserTurnStartedParams]:
+    """Pipecat's start strategies reading the TurnManager's reply state, as in
+    the session; returns the list their turn starts are recorded in."""
+    seen: list[UserTurnStartedParams] = []
+    h.strategies = UserTurnStrategies(start=user_turn_start_strategies())
+    bind_reply_state(h.strategies, lambda: h.tm.reply_open)
+    for s in h.strategies.start:
+
+        @s.event_handler("on_user_turn_started")
+        async def _started(_s, params: UserTurnStartedParams) -> None:
+            seen.append(params)
+
+    return seen
+
+
+async def _sentence_gap(h: "TM") -> None:
+    """One sentence played, then a stall over 0.35 s: Pipecat's output
+    transport reports the bot stopped while the reply is still coming."""
+    await h.bot_starts()
+    await h.word("Once", 1)
+    h.clock.advance(0.5)
+    await h.send(BotStoppedSpeakingFrame(), UP)
+    h.clock.advance(0.4)
+
+
+async def test_uh_huh_in_sentence_gap_does_not_interrupt():
+    async with TM() as h:
+        seen = _bound_start_strategies(h)
+        await _sentence_gap(h)
+        assert h.tm.reply_open
+        for s in h.strategies.start:
+            await s.process_frame(BotStoppedSpeakingFrame())
+            await s.process_frame(VADUserStartedSpeakingFrame())
+            await s.process_frame(InterimTranscriptionFrame("uh-huh", "user", "t"))
+        await h.user_talks(0.3, interim="uh-huh")
+        await h.send(VADUserStoppedSpeakingFrame(stop_secs=0.2), UP)
+        await h.send(TranscriptionFrame("uh-huh", "user", "t", finalized=True))
+        await h.bot_starts()  # the next sentence
+        await h.word("upon", 2)
+
+    assert seen and not any(p.enable_interruptions for p in seen)
+    assert not h.down(InterruptionFrame)
+    assert not h.events("interrupted")
+    assert h.down(UserBackchannelFrame)  # the reply goes on; the "uh-huh" stays out
+
+
+async def test_real_speech_in_sentence_gap_interrupts_through_turn_manager():
+    async with TM() as h:
+        seen = _bound_start_strategies(h)
+        await _sentence_gap(h)
+        for s in h.strategies.start:
+            await s.process_frame(VADUserStartedSpeakingFrame())
+        await h.user_talks(0.7)  # 600 ms+ of speech, no transcript yet
+        assert len(h.down(InterruptionFrame)) == 1
+        h.context.add_message({"role": "assistant", "content": "Once upon a time there was"})
+        await h.tm.assistant_turn_stopped()
+
+    # Pipecat left the interruption to the TurnManager
+    assert seen and not any(p.enable_interruptions for p in seen)
+    assert h.events("interrupted") == [{"type": "interrupted", "spoken_text": "Once"}]
+    assert h.context.get_messages()[-1]["content"] == "Once" + CUT_MARKER
+
+
+async def test_speech_in_thinking_phase_cancels_reply_in_real_aggregator():
+    """End of turn, then the child talks again before the first audio of the
+    reply: the bound start strategies cancel the pending reply."""
+    context = LLMContext([{"role": "user", "content": "tell me a story"}])
+    strategies = UserTurnStrategies(
+        start=user_turn_start_strategies(),
+        stop=[SmartTurnStopWithBackchannels(turn_analyzer=_CompleteAnalyzer())],
+    )
+    user = LLMUserAggregator(
+        context, params=LLMUserAggregatorParams(user_turn_strategies=strategies)
+    )
+    async with TM(user_aggregator=user, context=context) as h:
+        bind_reply_state(strategies, lambda: h.tm.reply_open)
+        await h.send(VADUserStartedSpeakingFrame())
+        h.clock.advance(0.5)
+        await h.send(TranscriptionFrame("a dragon", "user", "t", finalized=True))
+        await h.send(VADUserStoppedSpeakingFrame(stop_secs=0.2))
+        for _ in range(50):
+            if h.down(UserStoppedSpeakingFrame):
+                break
+            await asyncio.sleep(0.01)
+        assert h.down(UserStoppedSpeakingFrame)  # end of turn; the reply is pending
+        assert not h.tm.reply_open
+        before = len(h.down(InterruptionFrame))  # each turn start with no reply open
+        await h.send(VADUserStartedSpeakingFrame())  # no bot audio yet
+        for _ in range(50):
+            if len(h.down(InterruptionFrame)) > before:
+                break
+            await asyncio.sleep(0.01)
+
+    assert len(h.down(InterruptionFrame)) == before + 1
+    assert not h.events("interrupted")  # the aggregator's cancel, not a barge-in
 
 
 # ---------- backchannels ----------

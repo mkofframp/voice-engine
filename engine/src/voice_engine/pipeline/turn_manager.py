@@ -111,7 +111,8 @@ class TurnManager(FrameProcessor):
         self._sample_rate = sample_rate
         self._scheduler = BackchannelScheduler(config_ref().backchannel_frequency)
 
-        self._bot_speaking = False
+        self._bot_speaking = False  # raw: audio is playing right now
+        self._bot_frames: set[int] = set()  # ids of bot-speaking frames whose twin is due
         # The reply being played: when it started, where its context message goes,
         # and the words heard so far.
         self._reply_start: float | None = None
@@ -141,12 +142,8 @@ class TurnManager(FrameProcessor):
         await super().process_frame(frame, direction)
         now = self._clock()
 
-        if isinstance(frame, BotStartedSpeakingFrame):
-            self._bot_speaking = True
-            self._cancel_clip()
-            self._open_reply(now)
-        elif isinstance(frame, BotStoppedSpeakingFrame):
-            self._bot_speaking = False
+        if isinstance(frame, (BotStartedSpeakingFrame, BotStoppedSpeakingFrame)):
+            self._on_bot_frame(frame, now)
         elif isinstance(frame, InterruptionFrame):
             self._cancel_clip()
         elif isinstance(frame, VADUserStartedSpeakingFrame):
@@ -168,14 +165,14 @@ class TurnManager(FrameProcessor):
             self._user_turn = False
             self._heard = ""
             self._cancel_clip()
-            if not self._bot_speaking:
+            if not self.reply_open:
                 self._close_reply()  # whatever the bot says next is a new reply
         elif isinstance(frame, InterimTranscriptionFrame):
             self._heard = frame.text
             await self._check_barge_in(now)
         elif isinstance(frame, TranscriptionFrame):
             self._heard = frame.text
-            if self._bot_speaking:
+            if self.reply_open:
                 speech_ms = max(self._speech_ms(now), FINAL_MIN_SPEECH_MS)
                 kind = classify_user_speech(frame.text, speech_ms)
                 if kind == "backchannel":
@@ -200,13 +197,12 @@ class TurnManager(FrameProcessor):
         return self._last_speech_ms
 
     async def _check_barge_in(self, now: float) -> None:
-        if not self._bot_speaking:
+        if not self.reply_open:
             return
         if classify_user_speech(self._heard, self._speech_ms(now)) == "interruption":
             await self._interrupt(now)
 
     async def _interrupt(self, now: float) -> None:
-        self._bot_speaking = False  # one interruption per reply
         played_ms = int((now - self._reply_start) * 1000) if self._reply_start is not None else 0
         cut = truncate_reply(self._sentences, played_ms)
         spoken = cut[: -len(CUT_MARKER)] if cut.endswith(CUT_MARKER) else ""
@@ -228,7 +224,9 @@ class TurnManager(FrameProcessor):
         was written."""
         cut, self._pending_cut = self._pending_cut, None
         if cut is None:
-            self._reply_done = True
+            if self.reply_open:  # else: no audio played (e.g. cancelled while thinking)
+                self._reply_done = True
+                self._maybe_end_reply()
             return
         self._apply_cut(cut)
 
@@ -246,8 +244,37 @@ class TurnManager(FrameProcessor):
             messages.insert(min(cut.at, len(messages)), message)
         self._context.set_messages(messages)
 
+    @property
+    def reply_open(self) -> bool:
+        """The bot is in the middle of a reply: from its first audio until the
+        reply is written to the context and its last audio has played (or it is
+        interrupted). A silence between sentences (Pipecat sends
+        `BotStoppedSpeakingFrame` after 0.35 s of it) does not end the reply."""
+        return self._reply_start is not None
+
+    def _on_bot_frame(self, frame: Frame, now: float) -> None:
+        """Bot started/stopped speaking. The transport broadcasts each one both
+        ways; only the first copy to arrive counts (a late twin would reopen a
+        reply that has just ended)."""
+        if frame.broadcast_sibling_id is not None and frame.broadcast_sibling_id in self._bot_frames:
+            self._bot_frames.discard(frame.broadcast_sibling_id)
+            return
+        if frame.broadcast_sibling_id is not None:
+            self._bot_frames.add(frame.id)
+        if isinstance(frame, BotStartedSpeakingFrame):
+            self._bot_speaking = True
+            self._cancel_clip()
+            self._open_reply(now)
+        else:
+            self._bot_speaking = False
+            self._maybe_end_reply()
+
+    def _maybe_end_reply(self) -> None:
+        if self._reply_done and not self._bot_speaking:
+            self._close_reply()
+
     def _open_reply(self, now: float) -> None:
-        if self._reply_start is not None and not self._reply_done:
+        if self.reply_open:
             return  # more of the same reply (speech can pause between sentences)
         self._reply_start = now
         self._reply_done = False
@@ -268,8 +295,10 @@ class TurnManager(FrameProcessor):
         if direction != FrameDirection.DOWNSTREAM:
             return
         now = self._clock()
-        if isinstance(frame, BotStartedSpeakingFrame):
-            self._open_reply(now)  # this copy can beat the upstream one to the slot
+        if isinstance(frame, (BotStartedSpeakingFrame, BotStoppedSpeakingFrame)):
+            # This copy is in step with the reply's end reaching the assistant
+            # aggregator; the upstream one can arrive after it.
+            self._on_bot_frame(frame, now)
         elif isinstance(frame, TTSTextFrame):
             word = frame.text.strip()
             if not word or self._reply_start is None:
@@ -293,7 +322,7 @@ class TurnManager(FrameProcessor):
                 await self._on_verdict(data.is_complete, self._clock())
 
     async def _on_verdict(self, complete: bool, now: float) -> None:
-        if complete or not self._user_turn or self._bot_speaking:
+        if complete or not self._user_turn or self.reply_open:
             return
         if self._speech_start is not None or self._last_speech_end is None:
             return  # talking again already
@@ -310,12 +339,12 @@ class TurnManager(FrameProcessor):
     async def _play_later(self, delay: float, pause_ms: int) -> None:
         await asyncio.sleep(delay)
         self._clip_task = None
-        if self._user_turn and not self._bot_speaking and self._speech_start is None:
+        if self._user_turn and not self.reply_open and self._speech_start is None:
             await self._maybe_play(self._clock(), pause_ms)
 
     async def _maybe_play(self, now: float, pause_ms: int) -> None:
         self._scheduler.set_frequency(self._config_ref().backchannel_frequency)
-        if not self._scheduler.should_play(now, pause_ms, False, self._bot_speaking):
+        if not self._scheduler.should_play(now, pause_ms, False, self.reply_open):
             return
         mood = pick_mood(self._heard)
         picked = self.clip_bank.pick(mood)

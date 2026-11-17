@@ -483,8 +483,9 @@ async def test_patch_waits_for_reply_to_finish_when_child_talks_over_bot():
     async def child_talks_with_patch_pending():
         await asyncio.sleep(0.05)  # let the reply's start frame get under way first
         h.store.patch(h.session.id, {"emotion_intensity": 100})
-        await h.say("wait, wait")
-        await h.wait_for(lambda: "wait, wait" in [
+        # An "uh-huh" between sentences: the reply is still open, so it goes on.
+        await h.say("uh-huh")
+        await h.wait_for(lambda: "uh-huh" in [
             e.get("text") for e in h.out.events if e["type"] == "user_transcript"
         ])
         await asyncio.sleep(0.05)  # the transcript has gone past the turn tap
@@ -495,6 +496,8 @@ async def test_patch_waits_for_reply_to_finish_when_child_talks_over_bot():
     ]
     await h.start()
     await h.say("hello")
+    await h.wait_for(lambda: len(h.tts.spoken) >= 2)
+    await h.say("and then?")
     await h.wait_for(lambda: len(h.tts.spoken) >= 3)
     await h.stop()
 
