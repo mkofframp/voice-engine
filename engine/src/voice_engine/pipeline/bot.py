@@ -271,6 +271,7 @@ class SessionRunner:
         self._turn_heard = False  # a final transcript reached the aggregator this turn
         self._last_vad_stop: float | None = None
         self._vad_stop_secs = 0.0
+        self._context: LLMContext | None = None
 
     # ----- lifecycle -----
 
@@ -418,6 +419,18 @@ class SessionRunner:
         finally:
             self._store.end(self.session.id, reason)
             self.finished.set()
+
+    def history_roles(self) -> dict[str, int]:
+        """Messages per role in the LLM context, with no text (for DEBUG reads)."""
+        counts: dict[str, int] = {}
+        if self._context is None:
+            return counts
+        for msg in self._context.get_messages():
+            inner = getattr(msg, "message", msg)  # LLMSpecificMessage wraps a raw message
+            role = inner.get("role") if isinstance(inner, dict) else None
+            key = role if isinstance(role, str) else "other"
+            counts[key] = counts.get(key, 0) + 1
+        return counts
 
     async def stop(self, reason: str) -> None:
         """End now (no goodbye). Idempotent."""

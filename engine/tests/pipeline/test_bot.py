@@ -615,3 +615,17 @@ async def test_datachannel_invalid_type_not_logged(caplog):
     assert "INJECTED" not in caplog.text
     assert "evil" not in caplog.text
     assert "ignored invalid data channel message" in caplog.text
+
+
+async def test_history_roles_counts_without_text():
+    h = Harness(responses=[["[happy] Hi there!"]])
+    assert h.runner.history_roles() == {}  # no pipeline yet
+    await h.start()
+    await h.say("hello")
+    await h.wait_for(lambda: event_types(h).count("state") >= 4)
+    await h.wait_for(lambda: h.runner.history_roles().get("assistant") == 1)
+    roles = h.runner.history_roles()
+    await h.stop()
+
+    assert roles["user"] == 1 and roles["assistant"] == 1
+    assert all(isinstance(k, str) and isinstance(v, int) for k, v in roles.items())

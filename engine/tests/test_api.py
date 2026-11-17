@@ -197,3 +197,40 @@ def test_offer_accepts_token_nested_in_request_data(env):
         json={"sdp": "x", "type": "offer", "pc_id": None, "requestData": {"client_token": tok}},
     )
     assert r.status_code == 200
+
+
+class RolesRunner(FakeRunner):
+    def history_roles(self):
+        return {"system": 1, "user": 2, "assistant": 2}
+
+
+def _connected_with_roles(env, monkeypatch, debug):
+    client, store, *_ = env
+    if debug is None:
+        monkeypatch.delenv("DEBUG", raising=False)
+    else:
+        monkeypatch.setenv("DEBUG", debug)
+    body = make(client)
+    assert connect(client, body["client_token"]).status_code == 200
+    store.get(body["session_id"]).runner = RolesRunner(store.get(body["session_id"]))
+    return client.get(f"/sessions/{body['session_id']}", headers=AUTH).json()
+
+
+def test_history_roles_only_in_debug(env, monkeypatch):
+    got = _connected_with_roles(env, monkeypatch, None)
+    assert "history_roles" not in got
+    got = _connected_with_roles(env, monkeypatch, "0")
+    assert "history_roles" not in got
+
+
+def test_history_roles_in_debug(env, monkeypatch):
+    got = _connected_with_roles(env, monkeypatch, "1")
+    assert got["history_roles"] == {"system": 1, "user": 2, "assistant": 2}
+
+
+def test_history_roles_in_debug_before_connect(env, monkeypatch):
+    client, *_ = env
+    monkeypatch.setenv("DEBUG", "1")
+    sid = make(client)["session_id"]
+    got = client.get(f"/sessions/{sid}", headers=AUTH).json()
+    assert got["history_roles"] == {}

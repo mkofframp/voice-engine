@@ -1,3 +1,4 @@
+import os
 import secrets
 from pathlib import Path
 
@@ -186,11 +187,15 @@ def create_app(settings: Settings, store: SessionStore, runner_factory: RunnerFa
     @app.get("/sessions/{id}", dependencies=auth)
     async def read_session(id: str):
         s = get_session(id)
-        return {
+        out = {
             "status": s.status,
             "created_at": s.created_at,
             "config": s.config.model_dump(mode="json"),
         }
+        if os.environ.get("DEBUG") == "1":
+            # Debug only (used by scripts/e2e.py): message counts per role, never text.
+            out["history_roles"] = s.runner.history_roles() if s.runner is not None else {}
+        return out
 
     @app.patch("/sessions/{id}", dependencies=auth)
     async def patch_session(id: str, body: dict):
