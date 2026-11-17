@@ -66,7 +66,17 @@ def test_summary_median_p90():
     summary = s.summary()
     assert summary["turns"] == 10
     assert summary["median_ms"] == 550
+    assert isinstance(summary["median_ms"], int)
     assert summary["p90_ms"] == 910
+
+
+def test_summary_median_is_int():
+    s = SessionMetrics()
+    s.add(turn(last_word=0.0, audio_out=0.1))
+    s.add(turn(last_word=0.0, audio_out=0.2))
+    summary = s.summary()
+    assert summary["median_ms"] == 150
+    assert isinstance(summary["median_ms"], int)
 
 
 def test_summary_ignores_turns_without_total():

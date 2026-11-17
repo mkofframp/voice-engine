@@ -55,7 +55,7 @@ class SessionMetrics:
             return {"turns": 1, "median_ms": only, "p90_ms": only}
         return {
             "turns": len(totals),
-            "median_ms": statistics.median(totals),
+            "median_ms": round(statistics.median(totals)),
             "p90_ms": round(
                 statistics.quantiles(totals, n=10, method="inclusive")[8]
             ),
