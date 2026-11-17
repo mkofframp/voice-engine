@@ -582,3 +582,22 @@ async def test_system_prompt_parts():
 def _no_real_keys(monkeypatch):
     for k in ("DEEPGRAM_API_KEY", "ANTHROPIC_API_KEY", "CARTESIA_API_KEY"):
         monkeypatch.delenv(k, raising=False)
+
+
+async def test_datachannel_command_forwarded():
+    h = Harness(responses=[])
+    await h.start()
+    await h.transport.fire("on_app_message", {"type": "mute_mic"}, "peer")
+    assert h.runner._mic.muted is True
+    await h.transport.fire("on_app_message", {"type": "unmute_mic"}, "peer")
+    assert h.runner._mic.muted is False
+    await h.transport.fire("on_app_message", {"type": "say", "text": "Hi there."}, "peer")
+    await h.wait_for(lambda: len(h.tts.spoken) >= 1)
+    assert h.tts.spoken[0][0] == "Hi there."
+    # invalid messages are ignored and never crash the session
+    for bad in ({"type": "nope"}, {"type": "say"}, {"type": "say", "text": "x", "extra": 1},
+                "str", None, [1], {"no_type": 1}):
+        await h.transport.fire("on_app_message", bad, "peer")
+    assert h.runner._mic.muted is False
+    assert not h.runner.finished.is_set()
+    await h.stop()

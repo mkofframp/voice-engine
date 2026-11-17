@@ -1,0 +1,30 @@
+{
+  "name": "@voice-engine/client",
+  "version": "0.1.0",
+  "description": "Browser client for the voice engine: connect, receive events, send host commands.",
+  "type": "module",
+  "engines": { "node": ">=20.19" },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@pipecat-ai/client-js": "1.16.0",
+    "@pipecat-ai/small-webrtc-transport": "1.11.2"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}

@@ -186,3 +186,14 @@ def test_all_emitted_error_codes_have_copy():
     assert {"unauthorized", "invalid_request", "session_not_connected"} <= codes
     for code in codes:
         assert copy.get("errors." + code).strip()
+
+
+def test_offer_accepts_token_nested_in_request_data(env):
+    # The Pipecat JS transport nests caller data under "requestData".
+    client, *_ = env
+    tok = make(client)["client_token"]
+    r = client.post(
+        "/webrtc/offer",
+        json={"sdp": "x", "type": "offer", "pc_id": None, "requestData": {"client_token": tok}},
+    )
+    assert r.status_code == 200

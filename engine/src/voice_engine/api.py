@@ -1,13 +1,13 @@
 import secrets
-from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ValidationError, model_validator
 
 from voice_engine import copy
+from voice_engine.commands import command_adapter as _command_adapter
 from voice_engine.config import SessionConfig
 from voice_engine.sessions import (
     RunnerFactory,
@@ -42,41 +42,21 @@ def _message(code: str) -> str:
     return copy.get("errors." + code)
 
 
-class _Cmd(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class Say(_Cmd):
-    type: Literal["say"]
-    text: str
-
-
-class AddContext(_Cmd):
-    type: Literal["add_context"]
-    text: str
-
-
-class End(_Cmd):
-    type: Literal["end"]
-    graceful: bool = True
-
-
-class MuteMic(_Cmd):
-    type: Literal["mute_mic"]
-
-
-class UnmuteMic(_Cmd):
-    type: Literal["unmute_mic"]
-
-
-Command = Annotated[Say | AddContext | End | MuteMic | UnmuteMic, Field(discriminator="type")]
-_command_adapter = TypeAdapter(Command)
-
-
 class OfferBody(BaseModel):
     client_token: str
     sdp: str
     type: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _lift_nested_token(cls, data):
+        # The Pipecat JS transport nests caller-supplied request data under
+        # "requestData"; accept the token there too.
+        if isinstance(data, dict) and "client_token" not in data:
+            nested = data.get("requestData")
+            if isinstance(nested, dict) and "client_token" in nested:
+                return {**data, "client_token": nested["client_token"]}
+        return data
 
 
 def create_app(settings: Settings, store: SessionStore, runner_factory: RunnerFactory) -> FastAPI:

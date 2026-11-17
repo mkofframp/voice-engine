@@ -62,9 +62,11 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.cartesia.tts import CartesiaTTSSettings
 from pipecat.services.settings import LLMSettings
 from pipecat.workers.runner import WorkerRunner
+from pydantic import ValidationError
 
 from voice_engine import copy
 from voice_engine.backchannel import ClipBank
+from voice_engine.commands import command_adapter
 from voice_engine.config import SessionConfig
 from voice_engine.emotions import EMOTION_PROMPT
 from voice_engine.metrics import SessionMetrics, TurnMetrics
@@ -365,6 +367,10 @@ class SessionRunner:
             if self._cfg.greeting:
                 await worker.queue_frame(TTSSpeakFrame(self._cfg.greeting, append_to_context=True))
 
+        @transport.event_handler("on_app_message")
+        async def _app_message(_t, message, _sender) -> None:
+            await self._on_datachannel_message(message)
+
         @transport.event_handler("on_client_disconnected")
         async def _disconnected(_t, _client) -> None:
             self._spawn(self.stop("client_disconnected"))
@@ -480,6 +486,24 @@ class SessionRunner:
                 self._mic.muted = False
         else:
             raise ValueError(f"unknown command: {kind!r}")
+
+    async def _on_datachannel_message(self, message: Any) -> None:
+        """A command sent by the browser; validated like POST /sessions/{id}/commands."""
+        try:
+            cmd = command_adapter.validate_python(message)
+        except ValidationError:
+            # Log the shape only, never the content.
+            kind = message.get("type") if isinstance(message, dict) else None
+            log.warning(
+                "session %s ignored invalid data channel message (type=%s)",
+                self.session.id,
+                kind if isinstance(kind, str) and len(kind) <= 32 else type(kind).__name__,
+            )
+            return
+        try:
+            await self.command(cmd.model_dump())
+        except Exception:
+            log.exception("session %s data channel command failed", self.session.id)
 
     # ----- frame observation -----
 
