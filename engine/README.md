@@ -86,8 +86,8 @@ curl -s http://127.0.0.1:7860/sessions/$SID -H "Authorization: Bearer $ENGINE_AP
 With `DEBUG=1` the response also has `history_roles`, a count of LLM-context messages per
 role plus `backchannel_like`, the number of non-system messages whose whole text is a
 backchannel phrase or word (for example `{"user": 3, "assistant": 3, "backchannel_like": 0}`).
-The system prompt is passed as the LLM's `system_instruction`, so a `"system"` entry only
-appears after an `add_context` command. No message text is returned.
+The system prompt is passed as the LLM's `system_instruction`, so there is no `"system"`
+entry; an `add_context` note counts as a `"user"` message. No message text is returned.
 
 ### `PATCH /sessions/{id}` → 200
 
@@ -111,7 +111,7 @@ Needs a connected session (409 `session_not_connected` otherwise).
 | command | effect |
 |---|---|
 | `{"type": "say", "text": "…"}` | spoken as a bot turn, interruptible |
-| `{"type": "add_context", "text": "…"}` | appended to the LLM context, not spoken |
+| `{"type": "add_context", "text": "…"}` | appended to the LLM context, not spoken (as a user message marked "Note from the app, not the child", so it reaches the model even before the child's first turn) |
 | `{"type": "end", "graceful": true}` | graceful: say `goodbye_line`, then close |
 | `{"type": "mute_mic"}` / `{"type": "unmute_mic"}` | ignore / resume the child's audio |
 

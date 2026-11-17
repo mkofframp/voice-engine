@@ -97,6 +97,12 @@ RESPONSE_LENGTH_LINES = {
     "long": "Replies may run to five or six short sentences when the child wants a story.",
 }
 
+# How an add_context note enters the LLM context; an instruction to the model, not
+# user-facing copy. A user message, because Anthropic takes no system messages in the
+# conversation: Pipecat drops a leading one (the service's system_instruction wins)
+# and turns later ones into unmarked user text, indistinguishable from the child.
+HOST_NOTE = "(Note from the app, not the child: {text})"
+
 # turn_eagerness -> (VAD stop_secs, Smart Turn stop_secs). VAD stop_secs is the
 # silence before Smart Turn is asked "is the child done?"; Smart Turn stop_secs is
 # the silence after which the turn ends regardless. Children pause mid-thought a
@@ -480,7 +486,7 @@ class SessionRunner:
         if kind == "say":
             await self.queue_frame(TTSSpeakFrame(cmd["text"], append_to_context=True))
         elif kind == "add_context":
-            msg = {"role": "system", "content": cmd["text"]}
+            msg = {"role": "user", "content": HOST_NOTE.format(text=cmd["text"])}
             await self.queue_frame(LLMMessagesAppendFrame(messages=[msg], run_llm=False))
         elif kind == "end":
             if cmd.get("graceful", True):

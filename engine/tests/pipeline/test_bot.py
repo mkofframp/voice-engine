@@ -707,3 +707,46 @@ def test_configure_logging_rejects_levels_below_info():
 
     with pytest.raises(ValueError):
         configure_logging(level="DEBUG", sink=lambda m: None)
+
+
+# ---------- I1: add_context before the first turn reaches the model ----------
+
+
+async def _anthropic_request(messages: list, system: str) -> dict:
+    """What the real Anthropic adapter would send for this context."""
+    from pipecat.adapters.llm.services.anthropic_adapter import AnthropicLLMAdapter
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    return await AnthropicLLMAdapter().get_llm_invocation_params(
+        LLMContext(list(messages)), enable_prompt_caching=False, system_instruction=system
+    )
+
+
+async def test_add_context_before_first_turn_reaches_the_model():
+    h = Harness(responses=[["[happy] Hi Mia!"]])
+    await h.start()
+    await h.runner.command({"type": "add_context", "text": "The child's name is Mia."})
+    await h.say("hello")
+    await h.wait_for(lambda: len(h.tts.spoken) >= 1)
+    await h.stop()
+
+    sent = await _anthropic_request(h.llm.contexts[0], h.system_prompts[0])
+    texts = str(sent["messages"])
+    assert "Mia" in texts
+    assert "hello" in texts
+
+
+async def test_add_context_mid_conversation_is_marked_as_not_the_child():
+    h = Harness(responses=[["[happy] Hi!"], ["[happy] Cool!"]])
+    await h.start()
+    await h.say("hello")
+    await h.wait_for(lambda: len(h.tts.spoken) >= 1)
+    await h.runner.command({"type": "add_context", "text": "The child just finished a drawing."})
+    await h.say("look")
+    await h.wait_for(lambda: len(h.tts.spoken) >= 2)
+    await h.stop()
+
+    note = [m for m in h.llm.contexts[1] if "drawing" in str(m.get("content"))]
+    assert len(note) == 1
+    assert note[0]["role"] == "user"
+    assert "not the child" in note[0]["content"]
