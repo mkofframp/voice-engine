@@ -1,0 +1,33 @@
+# One term per line; matched case-insensitively against bot output. Lines starting with # are ignored.
+fuck
+shit
+bitch
+bastard
+asshole
+damn
+crap
+dick
+cock
+pussy
+slut
+whore
+nigger
+faggot
+retard
+kill yourself
+suicide
+murder
+rape
+porn
+sex
+naked
+drugs
+cocaine
+heroin
+weed
+vodka
+whiskey
+beer
+cigarette
+gun
+shoot you
