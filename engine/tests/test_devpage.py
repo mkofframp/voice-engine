@@ -34,7 +34,7 @@ async def test_dev_localhost_only(host, monkeypatch, tmp_path):
     monkeypatch.setattr(api, "BROWSER_BUNDLE", bundle)
     app, _ = build()
     transport = httpx.ASGITransport(app=app, client=(host, 1234))
-    async with httpx.AsyncClient(transport=transport, base_url="http://x") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost:7860") as c:
         for path in DEV_GETS:
             assert (await c.get(path)).status_code == 404, path
         r = await c.post("/dev/api/session", json={})
@@ -130,3 +130,36 @@ def test_dev_rejects_foreign_host_header(host):
 def test_dev_accepts_local_host_header(host):
     c, _ = local()
     assert c.get("/dev", headers={"Host": host}).status_code == 200
+
+
+def test_dev_no_host_header_fails_closed():
+    app, _ = build()
+    c = TestClient(app, client=("127.0.0.1", 1))
+    # Raw ASGI call without a Host header.
+    import asyncio
+
+    async def go():
+        sent = []
+        scope = {"type": "http", "method": "GET", "path": "/dev", "raw_path": b"/dev",
+                 "query_string": b"", "headers": [], "client": ("127.0.0.1", 1),
+                 "server": ("x", 80), "scheme": "http", "http_version": "1.1", "root_path": ""}
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(m):
+            sent.append(m)
+
+        await app(scope, receive, send)
+        return sent[0]["status"]
+
+    assert asyncio.run(go()) == 404
+    assert c is not None
+
+
+def test_non_dev_routes_ignore_host_check():
+    c, _ = local()
+    r = c.post("/sessions", json={}, headers={"Host": "evil.example", "Authorization": "Bearer wrong"})
+    assert r.status_code == 401
+    r = c.post("/sessions", json={}, headers={"Host": "evil.example", "Authorization": f"Bearer {KEY}"})
+    assert r.status_code == 201
