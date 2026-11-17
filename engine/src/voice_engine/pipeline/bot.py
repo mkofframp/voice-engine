@@ -69,6 +69,7 @@ from voice_engine.backchannel import ClipBank
 from voice_engine.commands import command_adapter
 from voice_engine.config import SessionConfig
 from voice_engine.emotions import EMOTION_PROMPT
+from voice_engine.history_debug import count_history
 from voice_engine.metrics import SessionMetrics, TurnMetrics
 from voice_engine.pipeline.events import event_frame
 from voice_engine.pipeline.prerender import SAMPLE_RATE
@@ -421,16 +422,10 @@ class SessionRunner:
             self.finished.set()
 
     def history_roles(self) -> dict[str, int]:
-        """Messages per role in the LLM context, with no text (for DEBUG reads)."""
-        counts: dict[str, int] = {}
+        """Messages per role plus `backchannel_like`, with no text (for DEBUG reads)."""
         if self._context is None:
-            return counts
-        for msg in self._context.get_messages():
-            inner = getattr(msg, "message", msg)  # LLMSpecificMessage wraps a raw message
-            role = inner.get("role") if isinstance(inner, dict) else None
-            key = role if isinstance(role, str) else "other"
-            counts[key] = counts.get(key, 0) + 1
-        return counts
+            return {}
+        return count_history(self._context.get_messages())
 
     async def stop(self, reason: str) -> None:
         """End now (no goodbye). Idempotent."""

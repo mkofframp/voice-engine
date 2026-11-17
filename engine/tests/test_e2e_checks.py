@@ -181,18 +181,34 @@ def reply_events():
 
 
 def test_history_pass():
-    r = e2e.check_history({"system": 1, "user": 2, "assistant": 2}, reply_events())
+    r = e2e.check_history({"user": 2, "assistant": 2, "backchannel_like": 0}, reply_events())
     assert r.passed, r.measured
 
 
 def test_history_fails_when_backchannel_entered():
-    r = e2e.check_history({"system": 1, "user": 2, "assistant": 3}, reply_events())
+    r = e2e.check_history({"user": 2, "assistant": 3, "backchannel_like": 1}, reply_events())
     assert not r.passed
 
 
 def test_history_counts_script_initiated_replies():
-    roles = {"user": 2, "assistant": 3}
+    roles = {"user": 2, "assistant": 3, "backchannel_like": 0}
     assert e2e.check_history(roles, reply_events(), extra_replies=1).passed
+
+
+def test_history_hidden_leak_fails():
+    # Three "thinking" turns, but one produced no assistant message (for example an
+    # interrupted reply), so a leaked backchannel keeps assistant <= replies. The old
+    # role-count check passed this; the server-side backchannel_like count catches it.
+    events = reply_events() + [state(20.0, "thinking"), state(20.5, "listening")]
+    roles = {"user": 3, "assistant": 3, "backchannel_like": 1}
+    assert roles["assistant"] <= 3  # what the old check relied on
+    r = e2e.check_history(roles, events)
+    assert not r.passed and "backchannel_like=1" in r.measured
+
+
+def test_history_needs_backchannel_like_count():
+    r = e2e.check_history({"user": 2, "assistant": 2}, reply_events())
+    assert not r.passed
 
 
 def test_history_needs_debug_field():
@@ -245,3 +261,43 @@ def test_place_onset_trims_and_pads():
 def test_place_onset_rejects_silence():
     with pytest.raises(ValueError):
         e2e.place_onset(pcm([0] * 100), onset_s=0.5, rate=1000)
+
+
+# ---------- fix round 1: latency phase, boundaries ----------
+
+
+def test_latency_counts_only_the_plain_turn_phase():
+    plain = [metrics(float(i), 600) for i in range(10)]
+    later = [metrics(100.0 + i, 5000) for i in range(5)]  # interruption/ramble phases
+    events = plain + later
+    assert not e2e.check_latency(events).passed
+    r = e2e.check_latency(events, window=(0.0, 50.0))
+    assert r.passed and "n=10" in r.measured, r.measured
+
+
+def test_latency_window_excludes_early_events():
+    events = [metrics(float(i), 600) for i in range(10)]
+    assert not e2e.check_latency(events, window=(5.0, 50.0)).passed  # only 5 turns in it
+
+
+def test_latency_boundary_exactly_1000_median_1500_p90():
+    totals = [500, 500, 500, 500, 1000, 1000, 1500, 1500, 1500, 1500]
+    r = e2e.check_latency([metrics(float(i), t) for i, t in enumerate(totals)])
+    assert r.passed and "median=1000ms p90=1500ms" in r.measured, r.measured
+
+
+def test_interruption_boundary_exactly_300ms():
+    events = [state(1.0, "speaking"), interrupted(10.3)]
+    r = e2e.check_interruption(events, onset_t=10.0)
+    assert r.passed and r.measured == "300ms", r.measured
+
+
+def test_backchannel_boundary_exactly_2s_into_turn():
+    r = e2e.check_backchannel_timing([backchannel(12.0)], user_turn_starts=[10.0])
+    assert r.passed, r.measured
+
+
+def test_warmup_imported_from_engine():
+    from voice_engine.backchannel import WARMUP_S
+
+    assert e2e.BACKCHANNEL_WARMUP_S is WARMUP_S

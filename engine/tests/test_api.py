@@ -228,6 +228,34 @@ def test_history_roles_in_debug(env, monkeypatch):
     assert got["history_roles"] == {"system": 1, "user": 2, "assistant": 2}
 
 
+class ContextRunner(FakeRunner):
+    """Runs the real counting over a fake LLM context."""
+
+    messages = [
+        {"role": "user", "content": "I like dinosaurs."},
+        {"role": "assistant", "content": [{"type": "text", "text": "[happy] Me too!"}]},
+        {"role": "assistant", "content": "Mm-hm."},  # a leaked backchannel
+    ]
+
+    def history_roles(self):
+        from voice_engine.history_debug import count_history
+
+        return count_history(self.messages)
+
+
+def test_history_roles_counts_backchannel_like(env, monkeypatch):
+    client, store, *_ = env
+    monkeypatch.setenv("DEBUG", "1")
+    body = make(client)
+    assert connect(client, body["client_token"]).status_code == 200
+    s = store.get(body["session_id"])
+    s.runner = ContextRunner(s)
+    r = client.get(f"/sessions/{body['session_id']}", headers=AUTH)
+    got = r.json()["history_roles"]
+    assert got == {"user": 1, "assistant": 2, "backchannel_like": 1}
+    assert "Mm-hm" not in r.text and "dinosaurs" not in r.text
+
+
 def test_history_roles_in_debug_before_connect(env, monkeypatch):
     client, *_ = env
     monkeypatch.setenv("DEBUG", "1")

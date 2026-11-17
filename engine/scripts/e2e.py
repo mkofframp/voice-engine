@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from voice_engine.backchannel import MIN_GAP_S
+from voice_engine.backchannel import WARMUP_S as BACKCHANNEL_WARMUP_S  # no backchannel in the first 2 s of a turn
 
 ENGINE_DIR = Path(__file__).resolve().parents[1]
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -38,7 +39,6 @@ MIN_TURNS = 10
 MEDIAN_MAX_MS = 1000
 P90_MAX_MS = 1500
 INTERRUPT_MAX_MS = 300
-BACKCHANNEL_WARMUP_S = 2.0  # no backchannel in the first 2 s of a user turn
 GAP_JITTER_S = 0.05  # allowed spread in data-channel delivery between two events
 
 RUN_KEYS = ["ENGINE_API_KEY", "DEEPGRAM_API_KEY", "ANTHROPIC_API_KEY", "CARTESIA_API_KEY"]
@@ -87,9 +87,15 @@ def check_latency(
     min_turns: int = MIN_TURNS,
     median_max_ms: int = MEDIAN_MAX_MS,
     p90_max_ms: int = P90_MAX_MS,
+    window: tuple[float, float] | None = None,
 ) -> CheckResult:
+    """`window` (start, end): count only turn_metrics received in the plain-turn phase."""
     threshold = f"median<={median_max_ms}ms, p90<={p90_max_ms}ms, n>={min_turns}"
-    totals = [e["total_ms"] for _, e in _of_type(events, "turn_metrics") if e.get("total_ms") is not None]
+    totals = [
+        e["total_ms"]
+        for t, e in _of_type(events, "turn_metrics")
+        if e.get("total_ms") is not None and (window is None or window[0] <= t <= window[1])
+    ]
     if not totals:
         return CheckResult("latency", False, "n=0 turns with total_ms", threshold)
     median, p90 = latency_stats(totals)
@@ -149,21 +155,25 @@ def check_history(
 ) -> CheckResult:
     """Backchannels must never enter the LLM context.
 
-    Each reply follows a "thinking" state (a user turn with words), plus any replies the
-    script started itself (greeting, `say`). An assistant message beyond that count can
-    only have come from somewhere else, such as a backchannel.
+    The engine counts context messages whose whole text is a backchannel phrase or word
+    (`backchannel_like`, DEBUG only); it must be 0. As a sanity check, assistant messages
+    must not outnumber the replies: each reply follows a "thinking" state, plus any the
+    script started itself (greeting, `say`).
     """
-    threshold = "assistant messages <= replies (no backchannel entries)"
+    threshold = "backchannel_like == 0, assistant messages <= replies"
     if history_roles is None:
         return CheckResult(
             "history", False, "no history_roles: start the engine with DEBUG=1", threshold
         )
+    leaked = history_roles.get("backchannel_like")
+    if leaked is None:
+        return CheckResult("history", False, "no backchannel_like count in history_roles", threshold)
     replies = sum(1 for _, e in _of_type(events, "state") if e.get("state") == "thinking")
     replies += extra_replies
     assistant = history_roles.get("assistant", 0)
     bcs = len(_of_type(events, "backchannel"))
-    measured = f"assistant={assistant} replies={replies} backchannels={bcs}"
-    return CheckResult("history", assistant <= replies, measured, threshold)
+    measured = f"backchannel_like={leaked} assistant={assistant} replies={replies} backchannels={bcs}"
+    return CheckResult("history", leaked == 0 and assistant <= replies, measured, threshold)
 
 
 def format_table(results: list[CheckResult]) -> str:
@@ -408,6 +418,7 @@ class Scenario:
         self.user_turn_starts: list[float] = []
         self.interrupt_onset: float | None = None
         self.uhhuh_window: tuple[float, float] | None = None
+        self.latency_window: tuple[float, float] | None = None
         self.track = None
 
     def on_message(self, message) -> None:
@@ -454,6 +465,7 @@ class Scenario:
 
     async def run(self) -> None:
         # 1. Latency: plain turns at the default config.
+        phase_start = time.monotonic()
         for name in TURN_FIXTURES:
             t0, _ = await self.play(name)
             try:
@@ -461,6 +473,7 @@ class Scenario:
             except ScenarioError as e:
                 print(f"e2e: {name}: {e}; continuing", file=sys.stderr)
                 await self.wait(self._quiet(1.5), 60, "quiet")
+        self.latency_window = (phase_start, time.monotonic())
         # 2. "uh-huh" over the bot: it must keep talking.
         await self._over_long_reply("uhhuh")
         # 3. A real interruption over the bot.
@@ -493,7 +506,7 @@ class Scenario:
 
 
 def results_for(sc: Scenario, history_roles: Mapping[str, int] | None) -> list[CheckResult]:
-    results = [check_latency(sc.events)]
+    results = [check_latency(sc.events, window=sc.latency_window)]
     if sc.interrupt_onset is None:
         results.append(CheckResult("interruption", False, "scenario did not run", f"<= {INTERRUPT_MAX_MS}ms"))
     else:

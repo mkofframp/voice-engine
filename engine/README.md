@@ -28,7 +28,9 @@ Secrets are read only from `engine/.env` (never from the request or the browser)
 
 Optional: `HOST` (default `127.0.0.1`), `PORT` (default `7860`), `CLIENT_TOKEN_TTL_S`
 (default `120`), `ALLOWED_ORIGINS` (JSON list, default `["http://localhost:5173"]`),
-`DEBUG=1` (adds `history_roles` to `GET /sessions/{id}`; for the e2e script only).
+`HOST`, `PORT`, `CLIENT_TOKEN_TTL_S` and `ALLOWED_ORIGINS` can go in `.env`. `DEBUG` is read
+from the shell environment only, not from `.env`: run `DEBUG=1 uv run voice-engine` to add
+`history_roles` to `GET /sessions/{id}` (for the e2e script only).
 
 Nothing is persisted. Sessions live in memory and transcripts are not logged.
 
@@ -78,7 +80,10 @@ curl -s http://127.0.0.1:7860/sessions/$SID -H "Authorization: Bearer $ENGINE_AP
 ```
 
 With `DEBUG=1` the response also has `history_roles`, a count of LLM-context messages per
-role (for example `{"system": 1, "user": 3, "assistant": 3}`). No message text is returned.
+role plus `backchannel_like`, the number of non-system messages whose whole text is a
+backchannel phrase or word (for example `{"user": 3, "assistant": 3, "backchannel_like": 0}`).
+The system prompt is passed as the LLM's `system_instruction`, so a `"system"` entry only
+appears after an `add_context` command. No message text is returned.
 
 ### `PATCH /sessions/{id}` → 200
 
@@ -118,7 +123,8 @@ The browser can send the same commands over the data channel (`client.sendComman
 
 Called by the JS client, not by the host. Body `{"sdp", "type": "offer", "client_token"}`;
 no API key, the single-use token authorises it. A second connection is refused (409
-`session_busy`). Origin must be in `ALLOWED_ORIGINS`.
+`session_busy`). `ALLOWED_ORIGINS` is the CORS allow-list: browsers on other origins cannot
+read the response, but the server does not reject a request that has no `Origin` header.
 
 ## Events (data channel → browser)
 
@@ -162,7 +168,8 @@ These values are not yet tuned against a live run (see "Status" below).
 
 ## Emotion map
 
-The LLM tags each sentence; the tag picks Cartesia (`sonic-3.6`) controls. Values are at full
+The LLM tags each sentence; the tag picks Cartesia controls (live TTS uses `sonic-3`; `sonic-3.6` is used only for
+pre-rendered audio). Values are at full
 intensity; `emotion_intensity` scales them toward neutral (0 = neutral delivery, speed factor
 and volume 1.0). `speed_factor` multiplies `speaking_speed`; the result is clamped to
 0.6-1.5, volume to 0.5-2.0. The prefix is added only at intensity ≥ 50. Unknown tags fall back
@@ -208,11 +215,11 @@ Runs the spec §7a automated Definition-of-done checks against a running engine:
 
 | check | threshold |
 |---|---|
-| latency | median `turn_metrics.total_ms` ≤ 1000, p90 ≤ 1500, over ≥ 10 turns at default config |
+| latency | median `turn_metrics.total_ms` ≤ 1000, p90 ≤ 1500, over ≥ 10 turns from the plain-turn phase only, at default config |
 | interruption | speech onset → `interrupted` ≤ 300 ms |
 | uh-huh | "uh-huh" during bot speech → no `interrupted` |
 | backchannel timing | none in the first 2 s of a user turn, none closer than `MIN_GAP_S["normal"]` (5 s) |
-| history | no backchannel text in the LLM context (via `history_roles`) |
+| history | `history_roles.backchannel_like` = 0 and assistant messages ≤ replies |
 
     # once: generate the synthetic child-like fixtures (needs CARTESIA_API_KEY)
     uv run python scripts/e2e.py --make-fixtures --voice-id <child-like Cartesia voice id>
