@@ -16,7 +16,7 @@ dependencies = [
 dev = ["pytest", "pytest-asyncio"]
 
 [project.scripts]
-voice-engine = "voice_engine.main:run"
+voice-engine = "voice_engine.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
