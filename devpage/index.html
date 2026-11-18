@@ -10,6 +10,8 @@
   #log { height: 22rem; overflow: auto; border: 1px solid #aaa; padding: .25rem; font: 12px ui-monospace, monospace; white-space: pre-wrap; }
   #metrics { font: 12px ui-monospace, monospace; white-space: pre; border: 1px solid #aaa; padding: .25rem; min-height: 8rem; }
   #status { font: 12px ui-monospace, monospace; }
+  #speak-section { grid-column: 1 / -1; }
+  #speak-text { height: 8rem; font-family: system-ui, sans-serif; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -23,6 +25,12 @@
   <div id="log"></div>
   <h2 id="h-metrics"></h2>
   <div id="metrics"></div>
+</section>
+<section id="speak-section">
+  <h2 id="h-speak"></h2>
+  <textarea id="speak-text"></textarea>
+  <p><label><input type="checkbox" id="speak-rewrite"> <span id="speak-rewrite-label"></span></label>
+     <button id="speak-go"></button> <button id="speak-stop" disabled></button> <span id="speak-status"></span></p>
 </section>
 <script type="module" src="/dev/devpage.js"></script>
 </body>

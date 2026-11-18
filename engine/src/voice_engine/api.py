@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, ValidationError, model_validator
 
 from voice_engine import copy
@@ -18,6 +18,8 @@ from voice_engine.sessions import (
     TokenInvalid,
 )
 from voice_engine.settings import Settings
+from voice_engine.pipeline.prerender import SAMPLE_RATE, RenderFailed
+from voice_engine.speak import MAX_CHARS, Speaker
 
 import logging
 
@@ -86,7 +88,12 @@ class OfferBody(BaseModel):
         return data
 
 
-def create_app(settings: Settings, store: SessionStore, runner_factory: RunnerFactory) -> FastAPI:
+def create_app(
+    settings: Settings,
+    store: SessionStore,
+    runner_factory: RunnerFactory,
+    speaker: Speaker | None = None,
+) -> FastAPI:
     app = FastAPI()
 
     app.add_middleware(
@@ -166,7 +173,10 @@ def create_app(settings: Settings, store: SessionStore, runner_factory: RunnerFa
 
     @app.get("/dev/copy.json", dependencies=dev)
     async def dev_copy():
-        keys = ("connect", "disconnect", "config_editor", "event_log", "metrics")
+        keys = (
+            "connect", "disconnect", "config_editor", "event_log", "metrics",
+            "speak_heading", "speak_placeholder", "speak_rewrite", "speak_button", "speak_stop",
+        )
         return JSONResponse({k: copy.get("devpage." + k) for k in keys}, headers=_NO_STORE)
 
     @app.get("/dev/config.json", dependencies=dev)
@@ -190,6 +200,50 @@ def create_app(settings: Settings, store: SessionStore, runner_factory: RunnerFa
     async def dev_create_session(body: dict):
         out = create_session_internal(body)
         return {"session_id": out["session_id"], "client_token": out["client_token"]}
+
+    async def speak_internal(body: dict) -> StreamingResponse:
+        """Read text aloud with emotion. Streams raw 16-bit mono PCM (see X-Sample-Rate)."""
+        text = body.get("text")
+        rewrite = body.get("rewrite", False)
+        if (
+            not isinstance(text, str) or not text.strip() or len(text) > MAX_CHARS
+            or not isinstance(rewrite, bool)
+        ):
+            raise ApiError(422, "invalid_request", [{
+                "loc": ["body"],
+                "msg": f"text must be 1-{MAX_CHARS} characters; rewrite must be a boolean",
+            }])
+        try:
+            cfg = SessionConfig.model_validate(body.get("config") or {})
+        except ValidationError as e:
+            raise ApiError(422, "invalid_request", validation_details(e)) from None
+        if speaker is None:
+            raise ApiError(502, "upstream_failed")
+        gen = speaker.stream(text, cfg, rewrite)
+        try:
+            first = await anext(gen)  # surface a failed first render as a clean error
+        except (RenderFailed, StopAsyncIteration):
+            await gen.aclose()
+            raise ApiError(502, "upstream_failed") from None
+
+        async def body_iter():
+            yield first
+            async for chunk in gen:
+                yield chunk
+
+        return StreamingResponse(
+            body_iter(),
+            media_type="audio/pcm",
+            headers={"X-Sample-Rate": str(SAMPLE_RATE), **_NO_STORE},
+        )
+
+    @app.post("/speak", dependencies=auth)
+    async def speak(body: dict):
+        return await speak_internal(body)
+
+    @app.post("/dev/api/speak", dependencies=[*dev, Depends(require_json)])
+    async def dev_speak(body: dict):
+        return await speak_internal(body)
 
     @app.get("/sessions/{id}", dependencies=auth)
     async def read_session(id: str):

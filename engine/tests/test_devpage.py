@@ -50,7 +50,10 @@ def test_dev_loopback_serves_page_and_copy():
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
     labels = c.get("/dev/copy.json").json()
-    assert set(labels) == {"connect", "disconnect", "config_editor", "event_log", "metrics"}
+    assert set(labels) == {
+        "connect", "disconnect", "config_editor", "event_log", "metrics",
+        "speak_heading", "speak_placeholder", "speak_rewrite", "speak_button", "speak_stop",
+    }
     assert KEY not in r.text
 
 

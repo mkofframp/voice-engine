@@ -86,6 +86,10 @@ class PrerenderCache:
         return await asyncio.shield(task)
 
     async def _render(self, text: str, voice_id: str, speed: float) -> bytes:
+        return await self.render(text, voice_id, {"speed": speed})
+
+    async def render(self, text: str, voice_id: str, generation_config: dict) -> bytes:
+        """One uncached Cartesia render (raw PCM at `SAMPLE_RATE`). Raises `RenderFailed`."""
         payload = {
             "model_id": CARTESIA_MODEL,
             "transcript": text,
@@ -96,7 +100,7 @@ class PrerenderCache:
                 "sample_rate": SAMPLE_RATE,
             },
             "language": "en",
-            "generation_config": {"speed": speed},
+            "generation_config": generation_config,
         }
         headers = {"Cartesia-Version": CARTESIA_VERSION, "X-API-Key": self._api_key}
         client = self._client or httpx.AsyncClient(timeout=self._timeout)

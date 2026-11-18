@@ -6,7 +6,12 @@
     "disconnect": "Disconnect",
     "config_editor": "Session configuration",
     "event_log": "Live events",
-    "metrics": "Latency and usage"
+    "metrics": "Latency and usage",
+    "speak_heading": "Text to read aloud",
+    "speak_placeholder": "Paste the text to read aloud.",
+    "speak_rewrite": "Allow simpler, child-friendly wording",
+    "speak_button": "Read aloud",
+    "speak_stop": "Stop"
   },
   "errors": {
     "token_invalid": "The session token is invalid or expired.",

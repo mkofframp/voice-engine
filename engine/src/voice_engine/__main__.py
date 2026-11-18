@@ -3,6 +3,7 @@
 import os
 import sys
 
+import anthropic
 import httpx
 import uvicorn
 from loguru import logger
@@ -11,6 +12,7 @@ from voice_engine.api import create_app
 from voice_engine.pipeline.bot import runner_factory
 from voice_engine.pipeline.prerender import PrerenderCache
 from voice_engine.sessions import SessionStore
+from voice_engine.speak import SentenceTagger, Speaker
 from voice_engine.settings import LOG_LEVELS, Settings
 from voice_engine.webhook import WebhookSender
 
@@ -42,7 +44,13 @@ def build_app(settings: Settings):
     store = SessionStore(token_ttl_s=settings.client_token_ttl_s)
     webhook = WebhookSender(httpx.AsyncClient())
     cache = PrerenderCache(settings.cartesia_api_key)
-    return create_app(settings, store, runner_factory(settings, store, webhook, cache))
+    speaker = Speaker(
+        SentenceTagger(anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)),
+        cache.render,
+    )
+    return create_app(
+        settings, store, runner_factory(settings, store, webhook, cache), speaker=speaker
+    )
 
 
 def main() -> None:

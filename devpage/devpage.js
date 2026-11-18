@@ -104,3 +104,81 @@ $("disconnect").onclick = () => {
   $("status").textContent = "";
   setConnected(false);
 };
+
+// ---- Text to read aloud: POST /dev/api/speak, stream raw PCM into Web Audio ----
+$("h-speak").textContent = copy.speak_heading;
+$("speak-text").placeholder = copy.speak_placeholder;
+$("speak-rewrite-label").textContent = copy.speak_rewrite;
+$("speak-go").textContent = copy.speak_button;
+$("speak-stop").textContent = copy.speak_stop;
+
+let speakAbort = null;
+let speakCtx = null;
+
+function stopSpeaking() {
+  if (speakAbort) speakAbort.abort();
+  speakAbort = null;
+  if (speakCtx) speakCtx.close();
+  speakCtx = null;
+  $("speak-go").disabled = false;
+  $("speak-stop").disabled = true;
+}
+
+$("speak-stop").onclick = stopSpeaking;
+
+$("speak-go").onclick = async () => {
+  const text = $("speak-text").value;
+  if (!text.trim()) return;
+  stopSpeaking();
+  $("speak-go").disabled = true;
+  $("speak-stop").disabled = false;
+  $("speak-status").textContent = "";
+  let cfg = {};
+  try { cfg = JSON.parse($("config").value); } catch { /* use engine defaults */ }
+  const abort = (speakAbort = new AbortController());
+  const t0 = performance.now();
+  try {
+    const res = await fetch("/dev/api/speak", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, rewrite: $("speak-rewrite").checked, config: cfg }),
+      signal: abort.signal,
+    });
+    if (!res.ok) {
+      log("speak error", await res.json().catch(() => ({ status: res.status })));
+      return stopSpeaking();
+    }
+    const rate = Number(res.headers.get("x-sample-rate")) || 24000;
+    const ctx = (speakCtx = new AudioContext({ sampleRate: rate }));
+    let at = ctx.currentTime + 0.05;
+    let carry = new Uint8Array(0);
+    let first = true;
+    const reader = res.body.getReader();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const bytes = new Uint8Array(carry.length + value.length);
+      bytes.set(carry); bytes.set(value, carry.length);
+      const usable = bytes.length - (bytes.length % 2);
+      carry = bytes.slice(usable);
+      if (!usable) continue;
+      const pcm = new Int16Array(bytes.buffer, 0, usable / 2);
+      const buf = ctx.createBuffer(1, pcm.length, rate);
+      const ch = buf.getChannelData(0);
+      for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+      const src = ctx.createBufferSource();
+      src.buffer = buf; src.connect(ctx.destination);
+      at = Math.max(at, ctx.currentTime);
+      src.start(at); at += buf.duration;
+      if (first) {
+        first = false;
+        $("speak-status").textContent = `${Math.round(performance.now() - t0)} ms`;
+      }
+    }
+    // Re-enable the button once playback has finished.
+    const left = Math.max(0, at - ctx.currentTime) * 1000;
+    setTimeout(() => { if (speakCtx === ctx) stopSpeaking(); }, left);
+  } catch (e) {
+    if (e.name !== "AbortError") { log("speak error", { message: String(e) }); stopSpeaking(); }
+  }
+};
