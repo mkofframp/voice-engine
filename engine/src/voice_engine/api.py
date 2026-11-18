@@ -93,6 +93,7 @@ def create_app(
     store: SessionStore,
     runner_factory: RunnerFactory,
     speaker: Speaker | None = None,
+    ice=None,
 ) -> FastAPI:
     app = FastAPI()
 
@@ -151,7 +152,13 @@ def create_app(
 
     @app.post("/sessions", status_code=201, dependencies=auth)
     async def create_session(body: dict):
-        return create_session_internal(body)
+        return await with_ice(create_session_internal(body))
+
+    async def with_ice(out: dict) -> dict:
+        # The browser needs the same relay as the engine when direct UDP is blocked.
+        if ice is not None:
+            out["ice_servers"] = await ice.browser()
+        return out
 
     # Local developer test page. Loopback peers only; X-Forwarded-For is never consulted.
     def require_loopback(request: Request) -> None:
@@ -199,7 +206,7 @@ def create_app(
     @app.post("/dev/api/session", status_code=201, dependencies=[*dev, Depends(require_json)])
     async def dev_create_session(body: dict):
         out = create_session_internal(body)
-        return {"session_id": out["session_id"], "client_token": out["client_token"]}
+        return await with_ice({"session_id": out["session_id"], "client_token": out["client_token"]})
 
     async def speak_internal(body: dict) -> StreamingResponse:
         """Read text aloud with emotion. Streams raw 16-bit mono PCM (see X-Sample-Rate)."""

@@ -9,6 +9,7 @@ import uvicorn
 from loguru import logger
 
 from voice_engine.api import create_app
+from voice_engine.ice import IceProvider
 from voice_engine.pipeline.bot import runner_factory
 from voice_engine.pipeline.prerender import PrerenderCache
 from voice_engine.sessions import SessionStore
@@ -48,8 +49,9 @@ def build_app(settings: Settings):
         SentenceTagger(anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)),
         cache.render,
     )
+    ice = IceProvider(settings.ice_servers, settings.turn_key_id, settings.turn_api_token)
     return create_app(
-        settings, store, runner_factory(settings, store, webhook, cache), speaker=speaker
+        settings, store, runner_factory(settings, store, webhook, cache, ice), speaker=speaker, ice=ice
     )
 
 

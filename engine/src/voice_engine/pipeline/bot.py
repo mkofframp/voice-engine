@@ -249,6 +249,7 @@ class SessionRunner:
         store: SessionStore,
         webhook,
         cache,
+        ice=None,
         services: ServicesFactory | None = None,
         clock: Callable[[], float] = time.monotonic,
         timer_tick_s: float = 0.5,
@@ -258,6 +259,7 @@ class SessionRunner:
         self._store = store
         self._webhook = webhook
         self._cache = cache
+        self._ice = ice
         self._services = services or real_services(settings)
         self._clock = clock
         self._tick = timer_tick_s
@@ -290,7 +292,11 @@ class SessionRunner:
         from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
         from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
-        conn = SmallWebRTCConnection(ice_servers=list(self._settings.ice_servers) or None)
+        if self._ice is not None:
+            ice_servers = await self._ice.server()
+        else:
+            ice_servers = list(self._settings.ice_servers) or None
+        conn = SmallWebRTCConnection(ice_servers=ice_servers)
         await conn.initialize(sdp=sdp, type=type)
         transport = SmallWebRTCTransport(
             webrtc_connection=conn,
@@ -731,8 +737,10 @@ class SessionRunner:
         return task
 
 
-def runner_factory(settings, store: SessionStore, webhook, cache) -> Callable[[Session], SessionRunner]:
+def runner_factory(settings, store: SessionStore, webhook, cache, ice=None) -> Callable[[Session], SessionRunner]:
     def make(session: Session) -> SessionRunner:
-        return SessionRunner(session, settings=settings, store=store, webhook=webhook, cache=cache)
+        return SessionRunner(
+            session, settings=settings, store=store, webhook=webhook, cache=cache, ice=ice
+        )
 
     return make

@@ -10,6 +10,8 @@ export interface VoiceEngineClientOptions {
   engineUrl: string;
   /** Single-use token issued by the host server (POST /sessions). Never an API key. */
   clientToken: string;
+  /** `ice_servers` from the session response. Needed when the engine is behind a relay. */
+  iceServers?: RTCIceServer[];
   /** Replace the WebRTC transport (used by tests). */
   transport?: EngineTransport;
 }
@@ -33,6 +35,7 @@ export class VoiceEngineClient {
       this.transport = await createWebRtcTransport({
         offerUrl: `${this.opts.engineUrl.replace(/\/+$/, "")}/webrtc/offer`,
         clientToken: this.opts.clientToken,
+        iceServers: this.opts.iceServers,
       });
     }
     const t = this.transport;

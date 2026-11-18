@@ -25,5 +25,8 @@ class Settings(BaseSettings):
     log_level: Literal["INFO", "WARNING", "ERROR"] = "INFO"
     # Hosted demo: STUN/TURN URLs for the server's WebRTC side (JSON list in env).
     ice_servers: list[str] = []
+    # Hosted demo: Cloudflare TURN relay key (both set = relay on), for hosts without direct UDP.
+    turn_key_id: str | None = None
+    turn_api_token: str | None = None
     # Hosted demo: at most this many live conversations at once (None = no cap).
     max_connected_sessions: int | None = None

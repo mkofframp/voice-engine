@@ -15,6 +15,8 @@ export interface WebRtcTransportOptions {
   /** Full URL of POST /webrtc/offer. */
   offerUrl: string;
   clientToken: string;
+  /** STUN/TURN servers from the session response (`ice_servers`); empty = browser defaults. */
+  iceServers?: RTCIceServer[];
 }
 
 /**
@@ -51,6 +53,7 @@ export async function createWebRtcTransport(opts: WebRtcTransportOptions): Promi
 
   const transport = new EngineWebRtcTransport({
     waitForICEGathering: true,
+    ...(opts.iceServers?.length ? { iceServers: opts.iceServers } : {}),
     webrtcRequestParams: {
       endpoint: opts.offerUrl,
       requestData: { client_token: opts.clientToken },

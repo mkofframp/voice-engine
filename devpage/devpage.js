@@ -81,7 +81,11 @@ async function connectSession() {
     return;
   }
   totals.length = 0;
-  const c = new mod.VoiceEngineClient({ engineUrl: location.origin, clientToken: body.client_token });
+  const c = new mod.VoiceEngineClient({
+    engineUrl: location.origin,
+    clientToken: body.client_token,
+    iceServers: body.ice_servers,
+  });
   client = c;
   c.onAny((e) => {
     log(e.type, e);

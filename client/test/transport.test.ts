@@ -41,6 +41,20 @@ describe("real transport wiring", () => {
   });
 });
 
+describe("ice servers", () => {
+  it("passes ice servers from the session response to the transport", async () => {
+    const ice = [{ urls: ["turns:turn.cloudflare.com:443?transport=tcp"], username: "u", credential: "c" }];
+    const client = new VoiceEngineClient({ engineUrl: "http://e", clientToken: "t", iceServers: ice });
+    await client.connect();
+    expect(h.instances[0].opts.iceServers).toEqual(ice);
+  });
+
+  it("leaves browser defaults when none are given", async () => {
+    await new VoiceEngineClient({ engineUrl: "http://e", clientToken: "t" }).connect();
+    expect("iceServers" in h.instances[0].opts).toBe(false);
+  });
+});
+
 describe("handleMessage override", () => {
   async function setup() {
     const t = await createWebRtcTransport({ offerUrl: "http://e/webrtc/offer", clientToken: "t" });
