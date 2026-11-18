@@ -11,8 +11,8 @@ DEFAULT_BLOCKLIST = [
     for line in (DATA_DIR / "default_blocklist.txt").read_text(encoding="utf-8").splitlines()
     if line.strip() and not line.lstrip().startswith("#")
 ]
-# Default Cartesia voice (the "Barbershop Man" id used in Pipecat examples); host may override.
-DEFAULT_VOICE_ID = "a0e99841-438c-4a64-b679-ae501e7d6091"
+# Default Cartesia voice; host may override per session.
+DEFAULT_VOICE_ID = "ec1e269e-9ca0-402f-8a18-58e0e022355a"  # Cartesia "Ariana - Kind Friend"
 
 
 class SessionConfig(BaseModel):
