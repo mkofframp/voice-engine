@@ -12,7 +12,7 @@ DEFAULT_BLOCKLIST = [
     if line.strip() and not line.lstrip().startswith("#")
 ]
 # Default Cartesia voice; host may override per session.
-DEFAULT_VOICE_ID = "ec1e269e-9ca0-402f-8a18-58e0e022355a"  # Cartesia "Ariana - Kind Friend"
+DEFAULT_VOICE_ID = "9779d1bc-9070-4a31-a3e0-7cc034da01ca"  # owner's cloned Cartesia voice "Motie" (private)
 
 
 class SessionConfig(BaseModel):
