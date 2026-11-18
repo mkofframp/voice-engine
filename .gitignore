@@ -7,3 +7,6 @@ dist-browser/
 __pycache__/
 engine/scripts/fixtures/*
 !engine/scripts/fixtures/README.md
+deploy/server.env
+deploy/Caddyfile
+deploy/.demo-passcode

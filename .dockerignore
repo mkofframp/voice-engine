@@ -1,0 +1,10 @@
+**/.env
+**/.venv
+**/node_modules
+**/__pycache__
+.git
+.superpowers
+deploy/server.env
+deploy/Caddyfile
+deploy/.demo-passcode
+engine/scripts/fixtures

@@ -1,0 +1,13 @@
+# Rendered by deploy.sh into deploy/Caddyfile (gitignored; it holds the passcode hash).
+__SITE__ {
+	basic_auth {
+		__USER__ __HASH__
+	}
+	redir / /dev 302
+	reverse_proxy 127.0.0.1:7860 {
+		# The engine serves its test page only to local hosts; Caddy is local.
+		header_up Host localhost:7860
+		# Text-to-voice streams audio; pass chunks through as they arrive.
+		flush_interval -1
+	}
+}

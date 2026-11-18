@@ -103,3 +103,17 @@ def test_ice_servers_setting_reaches_webrtc_connection(monkeypatch):
     except StopHere:
         pass
     assert seen["ice"] == ["stun:stun.l.google.com:19302"]
+
+
+def test_main_ignores_forwarded_headers(monkeypatch):
+    """The test page is local-only by peer address; a local proxy's X-Forwarded-For must not change it."""
+    import voice_engine.__main__ as m
+
+    seen = {}
+    monkeypatch.setattr(m, "Settings", lambda: Settings(
+        deepgram_api_key="d", anthropic_api_key="a", cartesia_api_key="c", engine_api_key=KEY))
+    monkeypatch.setattr(m, "configure_logging", lambda *a, **k: None)
+    monkeypatch.setattr(m, "build_app", lambda s: "app")
+    monkeypatch.setattr(m.uvicorn, "run", lambda app, **kw: seen.update(kw))
+    m.main()
+    assert seen["proxy_headers"] is False

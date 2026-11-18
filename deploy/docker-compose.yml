@@ -1,0 +1,24 @@
+# Host networking: the engine's WebRTC audio uses UDP ports on the server itself,
+# and Caddy reaches the engine on 127.0.0.1 (so the engine's local-only test page accepts it).
+services:
+  engine:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    network_mode: host
+    env_file: server.env
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    depends_on: [engine]
+
+volumes:
+  caddy_data:
+  caddy_config:

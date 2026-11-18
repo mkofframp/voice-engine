@@ -56,7 +56,8 @@ def build_app(settings: Settings):
 def main() -> None:
     settings = Settings()
     configure_logging(settings.log_level)
-    uvicorn.run(build_app(settings), host=settings.host, port=settings.port)
+    # proxy_headers off: X-Forwarded-For must never change the peer address (local-only dev routes).
+    uvicorn.run(build_app(settings), host=settings.host, port=settings.port, proxy_headers=False)
 
 
 if __name__ == "__main__":
