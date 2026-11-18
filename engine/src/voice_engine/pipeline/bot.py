@@ -69,6 +69,7 @@ from voice_engine.backchannel import ClipBank
 from voice_engine.commands import command_adapter
 from voice_engine.config import SessionConfig
 from voice_engine.emotions import EMOTION_PROMPT
+from voice_engine.pipeline.prerender import CARTESIA_MODEL
 from voice_engine.history_debug import count_history
 from voice_engine.metrics import SessionMetrics, TurnMetrics
 from voice_engine.pipeline.events import event_frame
@@ -178,7 +179,7 @@ def real_services(settings) -> ServicesFactory:
         tts = CartesiaTTSService(
             api_key=settings.cartesia_api_key,
             settings=CartesiaTTSService.Settings(
-                model="sonic-3", voice=cfg.voice_id, language=Language.EN
+                model=CARTESIA_MODEL, voice=cfg.voice_id, language=Language.EN
             ),
         )
         classifier = SafetyClassifier(anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key))
