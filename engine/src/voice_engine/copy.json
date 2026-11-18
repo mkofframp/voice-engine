@@ -20,7 +20,8 @@
     "upstream_failed": "An upstream speech or language model service failed.",
     "invalid_request": "The request body or configuration failed validation. See details for specific errors.",
     "unauthorized": "The API key in the Authorization header is missing or invalid.",
-    "session_not_connected": "The session does not yet have a live connection."
+    "session_not_connected": "The session does not yet have a live connection.",
+    "too_many_sessions": "The server has reached its simultaneous conversation limit; try again later."
   },
   "backchannel": {
     "neutral": [

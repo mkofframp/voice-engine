@@ -292,6 +292,10 @@ def create_app(
 
     @app.post("/webrtc/offer")
     async def webrtc_offer(body: OfferBody):
+        cap = settings.max_connected_sessions
+        # Checked before redeeming, so a turned-away client keeps its token.
+        if cap is not None and store.connected_count() >= cap:
+            raise ApiError(429, "too_many_sessions")
         try:
             s = store.redeem(body.client_token)
         except TokenInvalid:

@@ -23,3 +23,7 @@ class Settings(BaseSettings):
     client_token_ttl_s: int = 120
     allowed_origins: list[str] = ["http://localhost:5173"]
     log_level: Literal["INFO", "WARNING", "ERROR"] = "INFO"
+    # Hosted demo: STUN/TURN URLs for the server's WebRTC side (JSON list in env).
+    ice_servers: list[str] = []
+    # Hosted demo: at most this many live conversations at once (None = no cap).
+    max_connected_sessions: int | None = None

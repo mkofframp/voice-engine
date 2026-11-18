@@ -83,6 +83,9 @@ class SessionStore:
         self._tokens[token] = (session.id, now + self._ttl)
         return session, token
 
+    def connected_count(self) -> int:
+        return sum(1 for s in self._sessions.values() if s.status == "connected")
+
     def redeem(self, token: str) -> Session:
         entry = self._tokens.pop(token, None)
         if entry is None:

@@ -290,7 +290,7 @@ class SessionRunner:
         from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
         from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
-        conn = SmallWebRTCConnection()
+        conn = SmallWebRTCConnection(ice_servers=list(self._settings.ice_servers) or None)
         await conn.initialize(sdp=sdp, type=type)
         transport = SmallWebRTCTransport(
             webrtc_connection=conn,
