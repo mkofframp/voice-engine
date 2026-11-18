@@ -1,44 +1,48 @@
-# Hosted demo (Oracle Cloud Always Free)
+# Hosted demo (Hugging Face Spaces, free)
 
-One small always-on server runs the engine behind HTTPS and a shared username/password.
-Your API keys stay on the server; teammates only open a link.
+The engine runs in a free Hugging Face Space behind HTTPS and a shared username/password.
+Your API keys are stored as Space secrets; teammates only open a link.
 
-## 1. Create the server (once, ~20 min, in the Oracle console)
+Hugging Face gives the Space no direct UDP, so live conversation goes through Cloudflare's
+TURN relay (free up to 1,000 GB a month — a conversation uses a few MB a minute).
+Text-to-voice works without it.
 
-1. Sign up at <https://signup.cloud.oracle.com> (a card is asked for verification; Always Free resources are not charged). Pick a home region close to your team. It can't be changed later.
-2. **Compute → Instances → Create instance**
-   - Image: **Canonical Ubuntu 24.04**
-   - Shape: **Ampere → VM.Standard.A1.Flex**, 2 OCPUs, 12 GB memory (inside the free allowance)
-   - Networking: keep "Assign a public IPv4 address" on
-   - SSH keys: upload your public key (`~/.ssh/id_ed25519.pub`), or download the generated private key
-   - If it says "Out of capacity", try another availability domain, or retry later.
-3. **Open the ports** — on the instance page: Subnet → Security list → *Add ingress rules*, source `0.0.0.0/0`:
-   - TCP, destination port `80`
-   - TCP, destination port `443`
-   - UDP, destination port range `32768-60999` (live-conversation audio)
-4. Copy the instance's **public IP address**.
+## 1. Accounts (once, ~10 min)
+
+1. **Hugging Face**: sign up at <https://huggingface.co/join>, then create a token with
+   *Write* access at <https://huggingface.co/settings/tokens>, and on this Mac run
+   `uvx --from huggingface_hub hf auth login` and paste it.
+2. **Cloudflare TURN**: sign up at <https://dash.cloudflare.com/sign-up>, open
+   *Realtime → TURN Server → Create*, and copy the **Turn Token ID** and **API Token**.
+   Add them to `engine/.env`:
+   ```
+   TURN_KEY_ID=...
+   TURN_API_TOKEN=...
+   ```
 
 ## 2. Deploy (from this Mac)
 
 ```bash
-deploy/deploy.sh <public-ip>                      # uses your default SSH key
-deploy/deploy.sh <public-ip> ~/Downloads/key.pem  # or the key Oracle generated
+(cd client && npm run build:browser)              # Node 22
+uv run --no-project --with huggingface_hub python deploy/hf/deploy.py   # optional: space name
 ```
 
-It copies the project, installs Docker, opens the server firewall, builds the engine,
-gets an HTTPS certificate for `<ip-with-dashes>.sslip.io`, and prints the link, username and password.
-The password is kept in `deploy/.demo-passcode`; delete that file and redeploy to change it.
-Re-run the same command after code changes.
+It creates the public Space `<you>/kid-voice-demo`, stores the keys as secrets, uploads only the
+engine, test page and browser bundle (never `engine/.env`), waits for the build and prints the
+link, username and password. The password is kept in `deploy/.demo-passcode`; delete it and
+redeploy to change it. Re-run the same command after code changes.
+
+Teammates open `https://<you>-kid-voice-demo.hf.space/dev` directly. On the huggingface.co
+page the app is inside a frame, where the password prompt and microphone don't work.
 
 ## Limits and costs
 
-- `MAX_CONNECTED_SESSIONS` (default 3) live conversations at once; set it before `deploy.sh` to change.
-- Each conversation still spends Deepgram, Anthropic and Cartesia credit from the keys in `engine/.env`.
-- Live audio needs UDP. A teammate on a network that blocks UDP (some corporate VPNs) can use text-to-voice but not live conversation.
+- The Space's code is public (its *Files* tab); secrets are not.
+- A free Space sleeps after 48 hours without visitors; the next visit wakes it in about a minute.
+- `MAX_CONNECTED_SESSIONS` (default 3) live conversations at once.
+- Each conversation spends Deepgram, Anthropic and Cartesia credit from your keys.
 
-## Operating
+## Your own server instead
 
-```bash
-ssh ubuntu@<ip> 'cd kid-voice/deploy && sudo docker compose logs -f engine'   # logs
-ssh ubuntu@<ip> 'cd kid-voice/deploy && sudo docker compose down'            # stop
-```
+`deploy/deploy.sh <ip> [ssh-key]` deploys to any Ubuntu 24.04 server you can SSH into
+(Docker + Caddy with an automatic HTTPS certificate). Open TCP 80/443 and UDP 32768–60999.

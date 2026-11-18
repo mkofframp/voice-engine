@@ -1,0 +1,19 @@
+# Rendered by start.sh into /tmp/Caddyfile. HF terminates HTTPS, so plain HTTP here.
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+:7860 {
+	basic_auth {
+		__USER__ __HASH__
+	}
+	redir / /dev 302
+	reverse_proxy 127.0.0.1:7861 {
+		# The engine serves its test page only to local hosts; Caddy is local.
+		header_up Host localhost:7861
+		# Text-to-voice streams audio; pass chunks through as they arrive.
+		flush_interval -1
+	}
+}
